@@ -18,7 +18,9 @@
 > PR, test-merges the finalists with git and reviews their diffs, then shows a take / consider / skip board with reasons.
 > 2 981 PRs of a real project cost **$0.34** and **2 minutes**. Self-hosted, one Docker container. UI is in Russian for now.
 
-![Обзор: вердикты по колонкам](docs/overview-dark.png)
+![Обзор проекта](docs/overview-light.png)
+
+![Вердикты по колонкам](docs/board.png)
 
 ## Зачем
 
@@ -42,10 +44,10 @@
 | ![Стоимость](docs/cost.png) | **Стоимость.** Сколько реально стоил прогон и сколько та же работа стоила бы на Claude Opus, Sonnet и Haiku. |
 | ![Новый проект](docs/add.png) | **Новый проект.** Ссылка на репозиторий, пара слов о вашем сценарии — и полный прогон с прогрессом в реальном времени. |
 
-Ещё: несколько проектов в одном окне, живой поток ответов Jev во время прогона (SSE), тёмная и светлая темы, горячие клавиши
+Ещё: несколько проектов в одном окне, живой поток ответов Jev во время прогона (SSE), светлая и тёмная темы, горячие клавиши
 (`/` — поиск, `Esc` — закрыть), защита паролем, адаптивная вёрстка.
 
-![Светлая тема](docs/overview-light.png)
+![Тёмная тема](docs/overview-dark.png)
 
 ## Как это работает
 

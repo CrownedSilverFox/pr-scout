@@ -31,7 +31,7 @@ const STEPS = [
 const VERDICT = { take: "Берём", consider: "Рассмотреть", skip: "Пропускаем" };
 const TRACK = { fix: "Фикс", feature: "Фича", other: "Прочее" };
 const CI = { green: ["ok", "CI зелёный"], flaky_only: ["warn", "CI: только флаки"], e2e_only: ["warn", "CI: только флаки"], red: ["bad", "CI красный"], no_ci: ["line", "без CI"] };
-const KIND_COLORS = ["#8b7cff", "#22d3ee", "#34d399", "#fbbf24", "#f87171", "#5fa8ff", "#c084fc", "#f472b6", "#94a3b8"];
+const KIND_COLORS = ["var(--k8)", "var(--k0)", "var(--k1)", "var(--k2)", "var(--k3)", "var(--k4)", "var(--k5)", "var(--k6)", "var(--k7)"];
 
 const S = { slug: null, projects: [], status: {}, summary: null, prs: [], criteria: null, sort: { key: "score", dir: -1 }, shown: 120,
   track: "", live: null, job: null };
@@ -56,9 +56,9 @@ function toast(text, kind = "") {
 
 function ring(score, size = 46) {
   const r = size / 2 - 4, c = 2 * Math.PI * r, v = Math.max(0, Math.min(100, score || 0));
-  const color = v >= 80 ? "var(--take)" : v >= 65 ? "var(--brand)" : v >= 50 ? "var(--consider)" : "var(--skip)";
-  return `<div class="ring ${size > 60 ? "lg" : ""}"><svg width="${size}" height="${size}"><circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="var(--surface-3)" stroke-width="4"/>
-    <circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="${color}" stroke-width="4" stroke-linecap="round" stroke-dasharray="${(c * v) / 100} ${c}"/></svg><span class="v">${fmt(v)}</span></div>`;
+  const color = v >= 50 ? "var(--ink)" : "var(--faint)";
+  return `<div class="ring ${size > 60 ? "lg" : ""}"><svg width="${size}" height="${size}"><circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="var(--surface-3)" stroke-width="3"/>
+    <circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="${color}" stroke-width="3" stroke-dasharray="${(c * v) / 100} ${c}"/></svg><span class="v">${fmt(v)}</span></div>`;
 }
 const meter = (v, max) => `<span class="meter"><i><b style="width:${Math.max(0, Math.min(100, (v / max) * 100))}%"></b></i>${fmt(v, 1)}</span>`;
 
@@ -159,9 +159,9 @@ function renderKpis() {
   const jev = s.runs.filter((r) => r.stage === "stage1" || r.stage === "stage2");
   const cost = jev.reduce((a, r) => a + (r.cost_usd || 0), 0), t = jev.reduce((a, r) => a + (r.seconds || 0), 0);
   const k = (l, v, sub, cls = "") => `<div class="kpi ${cls}"><div class="l">${l}</div><div class="v">${v}</div><div class="sub">${sub}</div></div>`;
-  $("#kpis").innerHTML = k("Открытых PR", fmt(s.total), `${fmt(s.classified)} оценено Jev`) + k("Финалистов", fmt(s.finalists), "прошли на ревью кода")
-    + k("Берём", fmt(by("take")), "сильные и чистые", "take") + k("Рассмотреть", fmt(by("consider")), "есть оговорки", "consider")
-    + k("Пропускаем", fmt(by("skip")), "конфликт или слабый код", "skip") + k("Jev обошёлся в", money(cost), `за ${secs(t)} работы`, "accent");
+  $("#kpis").innerHTML = k("Открытых PR", fmt(s.total), `${fmt(s.finalists)} дошли до ревью кода`)
+    + k("Берём", fmt(by("take")), "сильные и чистые", "take") + k("Рассмотреть", fmt(by("consider")), `есть оговорки · ${fmt(by("skip"))} пропускаем`, "consider")
+    + k("Jev обошёлся в", money(cost), `за ${secs(t)} работы`, "accent");
   $("#count-all").textContent = fmt(s.classified);
 }
 function reasonsHtml(r, limit = 3) {
@@ -180,7 +180,7 @@ function renderBoard() {
   $("#board").innerHTML = ["take", "consider", "skip"].map((v) => {
     const list = fin.filter((r) => r.verdict === v), shown = list.slice(0, v === "skip" ? 12 : 40);
     return `<div class="col ${v}"><div class="col-h"><h2>${VERDICT[v]}</h2><span class="pill">${list.length}</span></div><div class="col-desc">${desc[v]}</div>
-      <div class="cards">${shown.map((r) => `<div class="card" data-n="${r.number}"><div><div class="num">#${r.number} · @${esc(r.author)}</div><div class="t">${esc(r.title)}</div>${tags(r)}${reasonsHtml(r, v === "skip" ? 1 : 3)}</div>${ring(r.score)}</div>`).join("")}
+      <div class="cards">${shown.map((r) => `<div class="card" data-n="${r.number}"><div><div class="num">#${r.number} · @${esc(r.author)}</div><div class="t">${esc(r.title)}</div>${tags(r)}${reasonsHtml(r, v === "skip" ? 1 : 2)}</div>${ring(r.score)}</div>`).join("")}
       ${list.length > shown.length ? `<div class="more-link">…и ещё ${list.length - shown.length} во вкладке «Все PR»</div>` : ""}</div></div>`;
   }).join("");
 }
@@ -193,7 +193,7 @@ function donut(counts) {
   const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]), total = entries.reduce((a, e) => a + e[1], 0) || 1;
   let acc = 0;
   const r = 44, c = 2 * Math.PI * r;
-  const arcs = entries.map(([k, v], i) => { const len = (v / total) * c, seg = `<circle cx="60" cy="60" r="${r}" fill="none" stroke="${KIND_COLORS[i % 9]}" stroke-width="16" stroke-dasharray="${len} ${c}" stroke-dashoffset="${-acc}"/>`; acc += len; return seg; }).join("");
+  const arcs = entries.map(([k, v], i) => { const len = (v / total) * c, seg = `<circle cx="60" cy="60" r="${r}" fill="none" stroke="${KIND_COLORS[i % 9]}" stroke-width="16" stroke-dasharray="${Math.max(0, len - 2)} ${c}" stroke-dashoffset="${-acc}"/>`; acc += len; return seg; }).join("");
   return `<div class="donut-wrap"><svg width="120" height="120" viewBox="0 0 120 120" style="transform:rotate(-90deg)">${arcs}</svg>
     <div class="legend">${entries.map(([k, v], i) => `<span><i style="background:${KIND_COLORS[i % 9]}"></i>${esc(kindLabel(k))} · ${fmt(v)}</span>`).join("")}</div></div>`;
 }
@@ -248,7 +248,7 @@ function answerHtml(key, a) {
   const neg = (S.criteria.negative || []).includes(key);
   let v;
   if (a.type === "noul") {
-    const col = neg ? (a.noul >= 0.5 ? "var(--danger)" : a.noul >= 0.25 ? "var(--consider)" : "var(--skip)") : a.noul >= 0.66 ? "var(--take)" : a.noul >= 0.34 ? "var(--consider)" : "var(--skip)";
+    const col = neg && a.noul >= 0.5 ? "var(--danger)" : a.noul >= 0.34 ? "var(--ink)" : "var(--faint)";
     v = `<div class="noul"><span class="track"><b style="width:${a.noul * 100}%;background:${col}"></b></span><b>${fmt(a.noul, 2)}</b></div>`;
   } else if (a.type === "choice") {
     const lbl = key === "area" ? S.criteria.areas : key === "kind" ? S.criteria.kinds : null;
