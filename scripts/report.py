@@ -13,16 +13,23 @@ import sys
 import time
 
 ROOT = pathlib.Path("/home/crnsfx/Work/pr-scout")
-SLUG = sys.argv[1] if len(sys.argv) > 1 else "paperclipai__paperclip"
+# Артефакты прогона лежат в data/ для одного проекта; для нескольких — свой каталог:
+#   python3 scripts/report.py <slug> [--dir data/runs/<slug>]
+argv = sys.argv[1:]
+DIR = ROOT / "data"
+if "--dir" in argv:
+    DIR = pathlib.Path(argv[argv.index("--dir") + 1])
+    argv = [a for i, a in enumerate(argv) if not (a == "--dir" or i == argv.index("--dir") + 1)]
+SLUG = argv[0] if argv else "paperclipai__paperclip"
 REPO = SLUG.replace("__", "/")
 
-rows = json.loads((ROOT / "data/last-run-prs.json").read_text())
+rows = json.loads((DIR / "last-run-prs.json").read_text())
 if isinstance(rows, dict):
     rows = rows.get("rows") or []
-summary = json.loads((ROOT / "data/last-run-summary.json").read_text())
-issues = json.loads((ROOT / "data/last-run-issues.json").read_text()) if (ROOT / "data/last-run-issues.json").exists() else []
-forks = json.loads((ROOT / "data/last-run-forks.json").read_text()) if (ROOT / "data/last-run-forks.json").exists() else []
-rivals = json.loads((ROOT / "data/last-run-rivals.json").read_text()) if (ROOT / "data/last-run-rivals.json").exists() else {}
+summary = json.loads((DIR / "last-run-summary.json").read_text())
+issues = json.loads((DIR / "last-run-issues.json").read_text()) if (DIR / "last-run-issues.json").exists() else []
+forks = json.loads((DIR / "last-run-forks.json").read_text()) if (DIR / "last-run-forks.json").exists() else []
+rivals = json.loads((DIR / "last-run-rivals.json").read_text()) if (DIR / "last-run-rivals.json").exists() else {}
 runs = summary.get("runs") or []
 cfg = summary.get("config") or {}
 # P["runs"] накапливает все прогоны за всё время: берём только последний цикл (от последнего fetch).
@@ -140,7 +147,7 @@ if forks:
             out.append(f"- {rep}: ещё {len(members)} — " + ", ".join(members[:8]))
         out.append("")
 
-stack = json.loads((ROOT / "data/last-run-stack.json").read_text()) if (ROOT / "data/last-run-stack.json").exists() else {}
+stack = json.loads((DIR / "last-run-stack.json").read_text()) if (DIR / "last-run-stack.json").exists() else {}
 if stack:
     hot = stack.get("hot") or {}
     out += ["", "# Стек: цена поддержки при мёрдже апстрима", "",
@@ -171,7 +178,7 @@ if rivals:
         out.append(f"- issue #{issue_no} ({r.get('issue_title') or '—'}): кандидаты {cands} → **берём {verdict}** "
                    f"(уверенность {r.get('confidence')}, proper_fix {r.get('proper_fix')})\n")
 
-mapping = json.loads((ROOT / "data/last-run-map.json").read_text()) if (ROOT / "data/last-run-map.json").exists() else {}
+mapping = json.loads((DIR / "last-run-map.json").read_text()) if (DIR / "last-run-map.json").exists() else {}
 if mapping:
     plans = mapping.get("plans") or {}
     names = {"safe": "Безопасный — максимум по баллу без конфликтов внутри",

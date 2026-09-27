@@ -34,6 +34,9 @@ services:
       - 8.8.8.8
     volumes:
       - scout_data:/data
+      # Пресеты живут в репозитории, а не в образе: новый репозиторий — просто новый
+      # presets/<owner__repo>.json, без пересборки образа.
+      - ./presets:/srv/presets:ro
     ports:
       - "127.0.0.1:${SCOUT_PORT:-8000}:8000"
 
