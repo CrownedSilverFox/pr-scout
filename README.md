@@ -226,6 +226,31 @@ GET  /api/events                       поток событий прогона 
 - **Бэкенд:** Python 3.12, FastAPI, SSE для живого прогона, git для тестового мержа.
 - **Данные:** JSON-файлы в `DATA_DIR`, база не нужна. Один Docker-образ: фронт собирается на первом этапе и отдаётся тем же FastAPI.
 
+## Локальный запуск на NordRouter (наш форк-адаптация)
+
+Оригинал ходит в Jev через `https://api.typesafe.ai/v1/systemone` с ключом TypeSafe.
+Тот же Jev есть в NordRouter, поэтому Scout работает и на нём — правки минимальные (см. `git log`):
+
+| Что | Было | Стало |
+|---|---|---|
+| Эндпоинт | хардкод `api.typesafe.ai/v1/systemone` | `JEV_API_URL` (по умолчанию NordRouter `/v1/evaluate`) |
+| Модель | хардкод `jev-latest` | `JEV_MODEL=typesafe-ai/jev` |
+| Ключ | только `TYPESAFE_API_KEY` | `NORDROUTER_API_KEY` или `TYPESAFE_API_KEY` |
+| Тип вопроса | `noul` | NordRouter знает только `boolean` → `to_provider()` переводит туда и `from_provider()` возвращает ответ в `noul` |
+| Цена для панели | хардкод `0.042` | `JEV_PRICE_PER_MTOK` (NordRouter берёт `$0.05`/1M — по заголовку `X-Charged-USD`) |
+| Параллелизм | `ThreadPool(16)` / `(12)` | `JEV_STAGE1_WORKERS=14`, `JEV_STAGE2_WORKERS=10` (у NordRouter лимит 15 rps) |
+
+Проверено живыми вызовами против NordRouter: `state` объектом и строкой, `criteria` объектом/списком,
+`instructions` строкой и объектом `{question, our_setup}`, полный набор из 15 вопросов этапа 1,
+32 параллельных запроса без 429. `noul` на NordRouter даёт `400 upstream_error` —
+это единственное реальное расхождение провайдеров.
+
+Наши цены (NordRouter, `$0.05`/1M вход, выход не тарифицируется): этап 1 ≈ `$0.00005` за PR,
+то есть 3 000 PR ≈ `$0,15`, быстрее и дешевле, чем в таблице ниже (там цены TypeSafe).
+
+Отличия от оригинала в эксплуатации: Docker требует `sudo` (пользователь `crnsfx` в группе `docker`
+с нового логина), `data/` — volume `scout_data`, UI слушает `127.0.0.1:8000`.
+
 ## Лицензия
 
 [MIT](LICENSE)

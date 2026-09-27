@@ -3,14 +3,32 @@ services:
     build: .
     restart: unless-stopped
     environment:
-      TYPESAFE_API_KEY: ${TYPESAFE_API_KEY}
+      # Jev: either provider works. NordRouter (local setup) reads NORDROUTER_API_KEY,
+      # TypeSafe reads TYPESAFE_API_KEY; JEV_API_URL + JEV_MODEL pick the endpoint.
+      JEV_API_URL: ${JEV_API_URL:-https://nordrouter.com/v1/evaluate}
+      JEV_MODEL: ${JEV_MODEL:-typesafe-ai/jev}
+      JEV_PRICE_PER_MTOK: ${JEV_PRICE_PER_MTOK:-0.05}
+      TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
+      NORDROUTER_API_KEY: ${NORDROUTER_API_KEY:-}
       APP_PASSWORD: ${APP_PASSWORD}
       # Recommended: a GitHub token without scopes (higher rate limit, CI status of finalists)
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       # Local model for PR descriptions (Ollama on the Docker host)
       OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      # NordRouter allows 15 rps on /v1/evaluate
+      JEV_STAGE1_WORKERS: ${JEV_STAGE1_WORKERS:-14}
+      JEV_STAGE2_WORKERS: ${JEV_STAGE2_WORKERS:-10}
+      # Descriptions of near-empty PRs through NordRouter instead of a local Ollama
+      NORDROUTER_URL: ${NORDROUTER_URL:-https://nordrouter.com}
+      DESCRIBER_MODEL: ${DESCRIBER_MODEL:-google/gemini-3.1-flash-lite}
+      DESCRIBER_WORKERS: ${DESCRIBER_WORKERS:-6}
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # Контейнерный DNS по умолчанию уходит на 127.0.0.53 (systemd-resolved на хосте) и
+    # изредка отдаёт «No address associated with hostname» — пейджинг fetch падал на этом.
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     volumes:
       - scout_data:/data
     ports:

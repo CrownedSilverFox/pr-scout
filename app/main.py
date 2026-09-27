@@ -21,16 +21,38 @@ from fastapi.staticfiles import StaticFiles
 
 from scoring import (KIND_LABELS, NEGATIVE, QUESTION_LABELS, STAGE2_QUESTIONS, auto_areas, cost_comparison,
                      mark_duplicates, score_pr, stage1_questions, stage1_state, verdict)
+from triage import (FORK_KIND_LABELS, ISSUE_KIND_LABELS, RIVAL_LABELS, apply_rival, fork_questions,
+                    issue_questions, rival_question, score_fork, score_issue)
 
 APP_DIR = Path(__file__).parent
 DATA = Path(os.environ.get("DATA_DIR", "/data"))
 PRESETS = APP_DIR.parent / "presets"
-JEV_URL = "https://api.typesafe.ai/v1/systemone"
-JEV_KEY = os.environ.get("TYPESAFE_API_KEY", "")
+# Jev endpoint. Two interchangeable providers:
+#   TypeSafe   https://api.typesafe.ai/v1/systemone   (types: noul / choice / score)
+#   NordRouter https://nordrouter.com/v1/evaluate     (types: boolean / choice / score)
+# NordRouter rejects `noul` with 400 upstream_error, so jev() translates it both ways.
+JEV_URL = os.environ.get("JEV_API_URL", "https://api.typesafe.ai/v1/systemone")
+JEV_MODEL = os.environ.get("JEV_MODEL", "jev-latest")
+JEV_KEY = os.environ.get("TYPESAFE_API_KEY") or os.environ.get("NORDROUTER_API_KEY", "")
 GH_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 PASSWORD = os.environ.get("APP_PASSWORD", "")
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://host.docker.internal:11434").rstrip("/")
-PRICE_PER_MTOK = 0.042
+# USD per 1M input tokens: TypeSafe 0.042, NordRouter 0.05 (measured from X-Charged-USD).
+PRICE_PER_MTOK = float(os.environ.get("JEV_PRICE_PER_MTOK", "0.042"))
+# NordRouter allows 15 rps; stage 1 is ~1.1 s per PR, so 16 workers sit right at the limit.
+STAGE1_WORKERS = int(os.environ.get("JEV_STAGE1_WORKERS", "14"))
+STAGE2_WORKERS = int(os.environ.get("JEV_STAGE2_WORKERS", "10"))
+# Descriptions of PRs whose author wrote nothing: a local Ollama model, or NordRouter's
+# OpenAI-compatible chat endpoint (no GPU needed). gemini-3.1-flash-lite ~8 s per diff;
+# deepseek-v4-flash is 10x cheaper but took 85 s on the same input, so it is too slow here.
+NORDROUTER_URL = os.environ.get("NORDROUTER_URL", "https://nordrouter.com").rstrip("/")
+DESCRIBER_MODEL = os.environ.get("DESCRIBER_MODEL", "google/gemini-3.1-flash-lite")
+DESCRIBER_WORKERS = int(os.environ.get("DESCRIBER_WORKERS", "6"))
+# Stage 2 git work (fetch branch, test merge, diff) runs in parallel worktrees: upstream did it
+# one PR at a time, which cost 32 of 48 minutes on a 3000-PR run while Jev answered in 21 s.
+MERGE_WORKERS = int(os.environ.get("JEV_MERGE_WORKERS", "6"))
+# Fork mining walks every fork with the compare API and asks Jev about the deltas.
+FORK_REST_WORKERS = int(os.environ.get("FORK_REST_WORKERS", "10"))
 
 app = FastAPI(title="PR Scout")
 lock = threading.RLock()
@@ -219,11 +241,38 @@ def http_json(url, data=None, headers=None, timeout=120):
         return json.load(r)
 
 
+def http_json_retry(url, data=None, headers=None, timeout=120, tries=5):
+    """Same as http_json but survives transient resolver/network blips.
+
+    Docker's embedded DNS occasionally answers `No address associated with hostname`
+    for a second or two (a systemd-resolved stub upstream); a paging query losing a
+    page used to abort the whole fetch job.
+    """
+    for attempt in range(tries):
+        try:
+            return http_json(url, data, headers, timeout)
+        except urllib.error.HTTPError:
+            raise
+        except Exception:
+            if attempt == tries - 1:
+                raise
+            time.sleep(1.5 * (attempt + 1))
+
+
 def jev(state_value, questions):
-    payload = {"model": "jev-latest", "state": state_value, "questions": questions}
+    """Ask Jev typed questions about one PR.
+
+    TypeSafe names a yes/no question `noul` and answers with `noul`; NordRouter's
+    /v1/evaluate only knows `boolean` and answers with `probability`. Translate in
+    both directions so scoring.py keeps working against either provider.
+    """
+    payload = {"model": JEV_MODEL, "state": state_value, "questions": to_provider(questions)}
     for attempt in range(6):
         try:
-            return http_json(JEV_URL, payload, {"Authorization": f"Bearer {JEV_KEY}", "Content-Type": "application/json"}, 180)
+            res = http_json(JEV_URL, payload, {"Authorization": f"Bearer {JEV_KEY}", "Content-Type": "application/json"}, 180)
+            if res.get("answers"):
+                res["answers"] = from_provider(res["answers"])
+            return res
         except urllib.error.HTTPError as e:
             if e.code in (429, 500, 502, 503, 529):
                 time.sleep(min(30, 2 ** attempt))
@@ -232,6 +281,63 @@ def jev(state_value, questions):
         except Exception:
             time.sleep(min(30, 2 ** attempt))
     return {"error": "retries exhausted"}
+
+
+def to_provider(questions):
+    """`noul` (TypeSafe) -> `boolean` (NordRouter); everything else goes as is."""
+    out = {}
+    for name, q in questions.items():
+        q = dict(q)
+        if q.get("type") == "noul":
+            q["type"] = "boolean"
+        out[name] = q
+    return out
+
+
+def from_provider(answers):
+    out = {}
+    for name, a in answers.items():
+        a = dict(a)
+        if a.get("type") == "boolean" and "probability" in a:
+            a["noul"] = a["probability"]
+        out[name] = a
+    return out
+
+
+def gh_rest(path, timeout=60, tries=6):
+    """GitHub REST GET that respects the rate limit instead of dying on it.
+
+    Reads X-RateLimit-Remaining/Reset on every answer and sleeps until the window
+    rolls over when the budget is nearly gone — a fork walk over 15k repos needs
+    several hourly windows and must survive them.
+    """
+    for attempt in range(tries):
+        try:
+            req = urllib.request.Request(f"https://api.github.com{path}", headers=gh_headers())
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                data = json.loads(r.read().decode())
+                remaining, reset = r.headers.get("X-RateLimit-Remaining"), r.headers.get("X-RateLimit-Reset")
+            if remaining is not None and reset and int(remaining) < 100:
+                wait = max(5, int(reset) - int(time.time()) + 5)
+                emit({"type": "log", "message": f"GitHub REST: осталось {remaining} запросов, пауза {wait} с до сброса окна"})
+                time.sleep(wait)
+            return data
+        except urllib.error.HTTPError as e:
+            reset, remaining = (e.headers.get("X-RateLimit-Reset") if e.headers else None), (e.headers.get("X-RateLimit-Remaining") if e.headers else None)
+            if e.code in (403, 429) and (remaining == "0" or e.code == 429):
+                wait = max(5, int(reset) - int(time.time()) + 5) if reset else 60
+                emit({"type": "log", "message": f"лимит GitHub исчерпан (HTTP {e.code}), пауза {wait} с"})
+                time.sleep(wait)
+                continue
+            if e.code in (404, 451):
+                return {"error": f"HTTP {e.code}"}
+            if attempt == tries - 1:
+                raise
+            time.sleep(2 * (attempt + 1))
+        except Exception:
+            if attempt == tries - 1:
+                raise
+            time.sleep(2 * (attempt + 1))
 
 
 def gh_headers(extra=None):
@@ -263,8 +369,8 @@ def fetch_job(slug):
     owner, name = cfg["repo"].split("/")
     prs, cursor, page = {}, None, 0
     while True:
-        res = http_json("https://api.github.com/graphql", {"query": GQL, "variables": {"owner": owner, "name": name, "cursor": cursor}},
-                        gh_headers({"Content-Type": "application/json"}), 120)
+        res = http_json_retry("https://api.github.com/graphql", {"query": GQL, "variables": {"owner": owner, "name": name, "cursor": cursor}},
+                              gh_headers({"Content-Type": "application/json"}), 120)
         if res.get("errors"):
             raise RuntimeError("GitHub: " + "; ".join(e.get("message", "") for e in res["errors"])[:300])
         repo = res["data"]["repository"]
@@ -314,12 +420,20 @@ def ollama_models():
 
 
 def describe_job(slug):
-    """Write a description from the diff with a local model when the author wrote little or nothing."""
+    """Write a description from the diff when the author wrote little or nothing.
+
+    Two providers: a local Ollama model (upstream default) or any OpenAI-compatible
+    chat endpoint — here NordRouter, which needs no local GPU.
+    """
     P, t0, started = projects[slug], time.time(), now_iso()
     cfg = P["config"]
     oc = cfg.get("ollama") or {}
     if not oc.get("enabled"):
         return None
+    provider = oc.get("provider") or "ollama"
+    describer_key = os.environ.get("NORDROUTER_API_KEY") or JEV_KEY
+    if provider == "nordrouter" and not describer_key:
+        raise RuntimeError("Для описаний через NordRouter нужен NORDROUTER_API_KEY")
     if not GH_TOKEN:
         raise RuntimeError("Для описаний нужен GITHUB_TOKEN (скачиваю дифы)")
     todo = [p for p in P["prs"].values() if len(p.get("body") or "") < oc.get("min_body", 200) and not p.get("ai_description")]
@@ -329,16 +443,24 @@ def describe_job(slug):
     def one(pr):
         req = urllib.request.Request(f"https://api.github.com/repos/{cfg['repo']}/pulls/{pr['number']}", headers=gh_headers({"Accept": "application/vnd.github.diff"}))
         with urllib.request.urlopen(req, timeout=60) as r:
-            diff = r.read().decode(errors="ignore")[:24000]
+            diff = r.read().decode(errors="ignore")[: oc.get("max_diff", 24000)]
         prompt = ("You review a GitHub pull request whose author wrote little or no description. From the title and the diff, "
                   "write a plain English description in 3-5 sentences: what problem it fixes or what it adds, and what the change does. "
                   f"No headings, no bullet points.\n\nTitle: {pr['title']}\n\nAuthor's text: {pr.get('body') or '(none)'}\n\nDiff:\n{diff}")
+        if provider == "nordrouter":
+            res = http_json_retry(f"{NORDROUTER_URL}/v1/chat/completions",
+                                  {"model": oc.get("model") or DESCRIBER_MODEL, "messages": [{"role": "user", "content": prompt}],
+                                   "max_tokens": oc.get("max_tokens", 400), "temperature": 0.2},
+                                  {"Authorization": f"Bearer {describer_key}", "Content-Type": "application/json"}, 180)
+            usage = res.get("usage") or {}
+            text = (res["choices"][0]["message"].get("content") or "").strip()
+            return pr["number"], text, usage.get("completion_tokens", 0)
         res = http_json(f"{OLLAMA_URL}/api/generate", {"model": oc.get("model", "qwen3.5:9b"), "prompt": prompt, "stream": False, "think": False,
                                                       "options": {"num_ctx": 16384, "temperature": 0.2}}, {"Content-Type": "application/json"}, 300)
         return pr["number"], res.get("response", "").strip(), res.get("eval_count", 0)
 
     done = 0
-    with cf.ThreadPoolExecutor(2) as ex:
+    with cf.ThreadPoolExecutor(DESCRIBER_WORKERS if provider == "nordrouter" else 2) as ex:
         for fut in cf.as_completed([ex.submit(one, p) for p in todo]):
             done += 1
             try:
@@ -365,7 +487,7 @@ def stage1_job(slug, limit=None):
     prs = list(P["prs"].values())[: limit or None]
     tokens, done, errors = 0, 0, 0
     progress(0, len(prs), phase="stage1")
-    with cf.ThreadPoolExecutor(16) as ex:
+    with cf.ThreadPoolExecutor(STAGE1_WORKERS) as ex:
         futures = {ex.submit(jev, stage1_state(p), questions): p["number"] for p in prs}
         for fut in cf.as_completed(futures):
             n, res = futures[fut], fut.result()
@@ -451,7 +573,7 @@ def stage2_job(slug):
     def review(n):
         pr = P["prs"][n]
         return n, jev({"title": pr["title"], "description": (pr.get("body") or pr.get("ai_description") or "")[:1500], "diff": diffs.get(n, "(no diff)")}, STAGE2_QUESTIONS)
-    with cf.ThreadPoolExecutor(12) as ex:
+    with cf.ThreadPoolExecutor(STAGE2_WORKERS) as ex:
         for n, res in ex.map(review, finalists):
             done += 1
             if "answers" in res:
@@ -590,7 +712,7 @@ def get_ollama_models():
 async def start_job(slug: str, name: str, request: Request):
     get_project(slug)
     if name in ("stage1", "stage2", "full") and not JEV_KEY:
-        raise HTTPException(400, "Не задан TYPESAFE_API_KEY")
+        raise HTTPException(400, "Не задан ключ Jev (TYPESAFE_API_KEY или NORDROUTER_API_KEY)")
     body = await request.json() if request.headers.get("content-length") not in (None, "0") else {}
     pipelines = {
         "full": [fetch_job, describe_job, stage1_job, stage2_job],

@@ -43,13 +43,16 @@
     "scotttong"
   ],
   "community_only": false,
-  "stack_prs_url": "https://raw.githubusercontent.com/gentslava/paperclip/plus/.plus/prs.txt",
+  "stack_prs_url": "",
   "stack_prs": [],
   "finalists": 120,
   "ollama": {
     "enabled": true,
-    "model": "qwen3.5:9b",
-    "min_body": 200
+    "provider": "nordrouter",
+    "model": "google/gemini-3.1-flash-lite",
+    "min_body": 200,
+    "max_tokens": 400,
+    "max_diff": 24000
   },
   "custom_areas": true,
   "default_branch": "master"
