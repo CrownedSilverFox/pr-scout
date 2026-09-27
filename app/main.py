@@ -53,7 +53,9 @@ DESCRIBER_WORKERS = int(os.environ.get("DESCRIBER_WORKERS", "6"))
 # one PR at a time, which cost 32 of 48 minutes on a 3000-PR run while Jev answered in 21 s.
 MERGE_WORKERS = int(os.environ.get("JEV_MERGE_WORKERS", "6"))
 # Fork mining walks every fork with the compare API and asks Jev about the deltas.
-FORK_REST_WORKERS = int(os.environ.get("FORK_REST_WORKERS", "10"))
+FORK_REST_WORKERS = int(os.environ.get("FORK_REST_WORKERS", "16"))
+# Fork list: REST pages are numbered, so they can be pulled several at a time.
+FORK_LIST_WORKERS = int(os.environ.get("FORK_LIST_WORKERS", "8"))
 
 app = FastAPI(title="PR Scout")
 lock = threading.RLock()
@@ -395,7 +397,7 @@ def gh_headers(extra=None):
 
 GQL = """query($owner:String!,$name:String!,$cursor:String){repository(owner:$owner,name:$name){
  defaultBranchRef{name}
- pullRequests(states:OPEN,first:40,after:$cursor,orderBy:{field:UPDATED_AT,direction:DESC}){
+ pullRequests(states:OPEN,first:100,after:$cursor,orderBy:{field:UPDATED_AT,direction:DESC}){
   pageInfo{hasNextPage endCursor}
   nodes{number title body isDraft createdAt updatedAt additions deletions authorAssociation author{login}
    files(first:100){nodes{path}} closingIssuesReferences(first:10){nodes{number}}}}}}"""
@@ -685,17 +687,10 @@ def stage2_job(slug):
 
 # ---------- issues, forks, rivals: the same Jev, three more questions ----------
 GQL_ISSUES = """query($owner:String!,$name:String!,$cursor:String){repository(owner:$owner,name:$name){
- issues(states:OPEN,first:50,after:$cursor,orderBy:{field:UPDATED_AT,direction:DESC}){
+ issues(states:OPEN,first:100,after:$cursor,orderBy:{field:UPDATED_AT,direction:DESC}){
   pageInfo{hasNextPage endCursor}
   nodes{number title body createdAt updatedAt comments{totalCount} authorAssociation author{login}
    labels(first:10){nodes{name}}}}}}"""
-
-GQL_FORKS = """query($owner:String!,$name:String!,$cursor:String){repository(owner:$owner,name:$name){
- forks(first:100,after:$cursor,orderBy:{field:PUSHED_AT,direction:DESC}){
-  pageInfo{hasNextPage endCursor}
-  nodes{nameWithOwner name pushedAt stargazerCount isFork owner{login}
-   defaultBranchRef{name target{... on Commit{oid}}}}}}}"""
-
 
 def fetch_issues_job(slug):
     """All open issues of the upstream repository (metadata only, no Jev yet)."""
@@ -763,42 +758,54 @@ def issues_job(slug):
 
 
 def fetch_forks_job(slug):
-    """The fork list of the upstream repository: who forked, when they last pushed, their head commit."""
+    """The fork list — REST pages fetched several at a time.
+
+    GraphQL pages by cursor, so 155 pages of 100 forks went strictly one after another
+    (~30 minutes); the same list over parallel REST pages takes about a minute. The
+    compare stage that follows is limited by GitHub's 5000 requests/hour, not by this.
+    """
     P, t0, started = projects[slug], time.time(), now_iso()
-    owner, name = P["config"]["repo"].split("/")
-    forks, cursor, page = {}, None, 0
+    cfg = P["config"]
+    owner, name = cfg["repo"].split("/")
+    forks = {}
+    page, empty_batches = 1, 0
     while True:
-        res = http_json_retry("https://api.github.com/graphql", {"query": GQL_FORKS, "variables": {"owner": owner, "name": name, "cursor": cursor}},
-                              gh_headers({"Content-Type": "application/json"}), 120)
-        if res.get("errors"):
-            raise RuntimeError("GitHub: " + "; ".join(e.get("message", "") for e in res["errors"])[:300])
-        conn = (res.get("data") or {}).get("repository", {}).get("forks")
-        if not conn:
-            raise RuntimeError("Репозиторий не найден или приватный")
-        for f in conn["nodes"]:
-            branch = (f.get("defaultBranchRef") or {})
-            forks[f["nameWithOwner"]] = {"fork": f["nameWithOwner"], "owner": (f.get("owner") or {}).get("login"),
-                                         "pushed": f["pushedAt"], "stars": f["stargazerCount"],
-                                         "branch": branch.get("name"), "oid": ((branch.get("target") or {}) or {}).get("oid")}
-        page += 1
-        progress(len(forks), len(forks), phase="forks-list", page=page)
-        if not conn["pageInfo"]["hasNextPage"]:
+        batch = list(range(page, page + FORK_LIST_WORKERS))
+        with cf.ThreadPoolExecutor(len(batch)) as ex:
+            answers = list(ex.map(lambda pg: gh_rest(f"/repos/{owner}/{name}/forks?per_page=100&page={pg}&sort=newest"), batch))
+        got = 0
+        for chunk in answers:
+            if not isinstance(chunk, list):
+                continue
+            got += len(chunk)
+            for f in chunk:
+                forks[f["full_name"]] = {"fork": f["full_name"], "owner": (f.get("owner") or {}).get("login"),
+                                         "pushed": f.get("pushed_at"), "stars": f.get("stargazers_count"),
+                                         "branch": f.get("default_branch")}
+        progress(len(forks), 0, phase="forks-list", page=batch[-1], seconds=round(time.time() - t0, 1))
+        empty_batches = empty_batches + 1 if got == 0 else 0
+        if empty_batches:
             break
-        cursor = conn["pageInfo"]["endCursor"]
+        page += len(batch)
     with lock:
         old = P.get("forks") or {}
         P["forks"] = {k: {**old.get(k, {}), **v} for k, v in forks.items()}
         save(slug, "forks")
     recompute(slug)
     return {"stage": "forks-list", "started": started, "seconds": round(time.time() - t0), "items": len(forks), "errors": 0,
-            "input_tokens": 0, "cost_usd": 0, "model": "GitHub GraphQL"}
+            "input_tokens": 0, "cost_usd": 0, "model": "GitHub REST (parallel pages)"}
 
 
 def forks_job(slug):
-    """Compare every fork with upstream and ask Jev about the commits it has ahead.
+    """Compare every fork with upstream and classify the deltas — streaming, one fork at a time.
 
-    One compare request per fork; the REST budget is 5000/h, so the walk spans several
-    hourly windows by design (gh_rest sleeps to the reset instead of failing).
+    Каждый форк проходит свою цепочку целиком и сразу: compare → (если есть коммиты впереди) Jev →
+    строка в отчёте. Раньше это были две фазы (сначала все 15к compare, потом Jev), и первые
+    результаты появлялись только через три часа. Сравнения идут в одном пуле, классификация — в
+    другом, через очередь: Jev никогда не ждёт сеть и наоборот.
+
+    Один compare на форк; лимит REST 5000/ч, поэтому проход занимает несколько часовых окон —
+    gh_rest спит до сброса окна вместо падения. Прогресс и результаты видны по ходу.
     """
     P, t0, started = projects[slug], time.time(), now_iso()
     cfg = P["config"]
@@ -812,13 +819,23 @@ def forks_job(slug):
     if fcfg.get("min_stars"):
         forks = [f for f in forks if (f.get("stars") or 0) >= int(fcfg["min_stars"])]
     todo = [f for f in forks if not f.get("scanned")]
-    progress(0, len(todo), phase="forks-compare")
-    errs = 0
+    if not todo:
+        return {"stage": "forks", "started": started, "seconds": 0, "items": 0, "errors": 0,
+                "input_tokens": 0, "cost_usd": 0, "model": "GitHub compare + Jev"}
+    questions = fork_questions(cfg)
+    queue: Queue = Queue(maxsize=max(8, FORK_REST_WORKERS * 8))
+    stat = {"compared": 0, "classified": 0, "tokens": 0, "errors": 0, "ahead": 0, "saved": 0}
     t0 = time.time()
+
+    def note(**extra):
+        progress(stat["compared"], len(todo), phase="forks", ahead=stat["ahead"], classified=stat["classified"],
+                 tokens=stat["tokens"], seconds=round(time.time() - t0, 1), **extra)
 
     def compare(f):
         fork_owner, fork_repo = f["fork"].split("/")
-        path = f"/repos/{owner}/{name}/compare/{base}...{fork_owner}:{f['branch']}"
+        # per_page ограничивает ответ: compare возвращает до 250 коммитов и до 300 файлов,
+        # а нам нужны счётчики и заголовки, не весь список.
+        path = f"/repos/{owner}/{name}/compare/{base}...{fork_owner}:{f['branch']}?per_page={int(fcfg.get('max_commits', 30))}"
         res = gh_rest(path)
         if res.get("error"):
             return f, {"status": res["error"], "ahead": 0, "behind": 0, "commits": [], "files": [], "lines": 0}
@@ -830,41 +847,69 @@ def forks_job(slug):
                    "commits": commits[-int(fcfg.get("max_commits", 30)):], "files": [x["filename"] for x in (res.get("files") or [])][:20],
                    "lines": lines, "scanned": now_iso()}
 
-    done = 0
-    with cf.ThreadPoolExecutor(FORK_REST_WORKERS) as ex:
-        for fut in cf.as_completed([ex.submit(compare, f) for f in todo]):
-            f, res = fut.result()
-            done += 1
-            with lock:
-                P["forks"][f["fork"]].update(res)
-                if done % 25 == 0:
-                    save(slug, "forks")
-            progress(done, len(todo), phase="forks-compare", ahead=sum(1 for v in P["forks"].values() if (v.get("ahead") or 0) > 0),
-                     seconds=round(time.time() - t0, 1))
-    ahead = [f for f in P["forks"].values() if (f.get("ahead") or 0) > 0 and f.get("commits")]
-    questions = fork_questions(cfg)
-    tokens, errs = 0, 0
-    progress(0, len(ahead), phase="forks")
-    t0 = time.time()
-    with cf.ThreadPoolExecutor(STAGE1_WORKERS) as ex:
-        futures = {ex.submit(jev, {"repo": cfg["repo"], "fork": f["fork"], "behind_upstream_by": f.get("behind"),
-                                   "commits": f["commits"], "files": f.get("files")}, questions): f["fork"] for f in ahead}
-        for fut in cf.as_completed(futures):
-            key, res = futures[fut], fut.result()
-            done += 1
-            if "answers" in res:
-                tokens += res["usage"]["input_tokens"]
+    def classify():
+        """Второй пул: Jev по дельте форка, сразу за сравнением."""
+        while True:
+            item = queue.get()
+            try:
+                if item is None:
+                    return
+                f, res = item
+                ans = jev({"repo": cfg["repo"], "fork": f["fork"], "behind_upstream_by": res.get("behind"),
+                           "commits": res["commits"], "files": res["files"]}, questions)
                 with lock:
-                    P["forks"][key]["answers"] = res["answers"]
-                    P["forks"][key]["usage"] = res["usage"]
-            else:
-                errs += 1
-            progress(done, len(ahead), phase="forks", tokens=tokens, seconds=round(time.time() - t0, 1))
+                    if "answers" in ans:
+                        P["forks"][f["fork"]]["answers"] = ans["answers"]
+                        P["forks"][f["fork"]]["usage"] = ans["usage"]
+                        stat["classified"] += 1
+                        stat["tokens"] += ans["usage"]["input_tokens"]
+                        row = fork_rows(P).get(f["fork"])
+                    else:
+                        P["forks"][f["fork"]]["error"] = ans.get("error", "ошибка Jev")
+                        stat["errors"] += 1
+                        row = None
+                emit({"type": "fork", "project": slug, "fork": f["fork"], "ahead": res.get("ahead"),
+                      "score": (row or {}).get("score"), "kind": (row or {}).get("kind_label"),
+                      "commits": [c["message"] for c in res["commits"][-3:]], "done": stat["compared"], "total": len(todo)})
+            except Exception as e:
+                with lock:
+                    stat["errors"] += 1
+                emit({"type": "log", "message": f"форк {item[0]['fork'] if item else '?'}: {str(e)[:160]}"})
+            finally:
+                queue.task_done()
+
+    consumers = cf.ThreadPoolExecutor(STAGE1_WORKERS, thread_name_prefix="jev")
+    consumer_futures = [consumers.submit(classify) for _ in range(STAGE1_WORKERS)]
+    try:
+        with cf.ThreadPoolExecutor(FORK_REST_WORKERS, thread_name_prefix="compare") as ex:
+            for fut in cf.as_completed([ex.submit(compare, f) for f in todo]):
+                f, res = fut.result()
+                with lock:
+                    P["forks"][f["fork"]].update(res)
+                    stat["compared"] += 1
+                    if (res.get("ahead") or 0) > 0:
+                        stat["ahead"] += 1
+                if (res.get("ahead") or 0) > 0 and res.get("commits"):
+                    queue.put((f, res))          # классифицируем сразу, не дожидаясь конца прохода
+                    while queue.full():
+                        time.sleep(0.2)
+                else:
+                    note()                        # форку нечего классифицировать: строка уже готова
+                with lock:
+                    if stat["compared"] % int(fcfg.get("save_every", 25)) == 0:
+                        save(slug, "forks")
+                        stat["saved"] += 1
+                note()
+    finally:
+        for _ in consumer_futures:
+            queue.put(None)
+        consumers.shutdown(wait=True)
     with lock:
         save(slug, "forks")
     recompute(slug)
-    return {"stage": "forks", "started": started, "seconds": round(time.time() - t0), "items": len(todo), "errors": errs,
-            "input_tokens": tokens, "cost_usd": round(tokens * PRICE_PER_MTOK / 1e6, 4), "model": "GitHub compare + Jev"}
+    return {"stage": "forks", "started": started, "seconds": round(time.time() - t0), "items": stat["compared"],
+            "errors": stat["errors"], "input_tokens": stat["tokens"], "cost_usd": round(stat["tokens"] * PRICE_PER_MTOK / 1e6, 4),
+            "model": "GitHub compare + Jev"}
 
 
 def rivals_job(slug):

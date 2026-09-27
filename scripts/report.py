@@ -25,8 +25,15 @@ forks = json.loads((ROOT / "data/last-run-forks.json").read_text()) if (ROOT / "
 rivals = json.loads((ROOT / "data/last-run-rivals.json").read_text()) if (ROOT / "data/last-run-rivals.json").exists() else {}
 runs = summary.get("runs") or []
 cfg = summary.get("config") or {}
-cost = sum(r.get("cost_usd") or 0 for r in runs)
-tokens = sum(r.get("input_tokens") or 0 for r in runs)
+# P["runs"] накапливает все прогоны за всё время: берём только последний цикл (от последнего fetch).
+cycle = []
+for r in reversed(runs):
+    if r.get("stage") == "fetch" and cycle:
+        break
+    cycle.append(r)
+cycle.reverse()
+cost = sum(r.get("cost_usd") or 0 for r in cycle)
+tokens = sum(r.get("input_tokens") or 0 for r in cycle)
 
 KIND = {"bugfix": "фикс", "feature": "фича", "performance": "перф", "security": "безопасность", "refactor": "рефакторинг",
         "docs": "доки", "tests_ci": "тесты/CI", "chore_deps": "обслуживание", "experimental": "эксперимент"}
@@ -69,13 +76,21 @@ for v in by:
 out = [f"# PR Scout: {REPO}", "",
        f"Прогон: {len(rows)} PR с баллами, финалистов {summary.get('finalists')}, "
        f"Jev потратил ${cost:.4f} ({tokens} входных токенов).", ""]
-for stage in runs:
+for stage in cycle:
     out.append(f"- `{stage.get('stage')}`: {stage.get('items')} шт · {stage.get('seconds')} с · ${stage.get('cost_usd')} · ошибок {stage.get('errors')}")
 comp = summary.get("comparison")
 if comp:
-    out += ["", "| вариант | цена |", "|---|---:|"]
-    for row in comp["rows"]:
-        out.append(f"| {row['name']} | ${row['cost']} |")
+    mi = comp["input_tokens"]
+    stages = ("stage1", "stage2", "issues", "forks", "rivals")
+    out += ["", f"Последний цикл: {tokens} входных токенов, ${cost:.4f}. Все прогоны в истории: "
+                f"{mi} токенов, ${sum(r.get('cost_usd') or 0 for r in runs):.4f}.",
+            "", "| вариант | цена |", "|---|---:|"]
+    out.append(f"| Jev (факт, последний цикл) | ${cost:.4f} |")
+    inp = sum(r.get("input_tokens", 0) for r in cycle if r.get("stage") in stages)
+    outp = sum(r.get("output_tokens") or 0 for r in cycle) or sum((1000 if r.get("stage") == "stage1" else 1500) * r.get("items", 0) for r in cycle if r.get("stage") in stages)
+    for name, (pi, po) in {"Claude Opus 5.5": (4.0, 20.0), "Claude Sonnet 5": (2.0, 10.0), "Claude Haiku 4.5": (1.0, 5.0)}.items():
+        c = inp * pi / 1e6 + outp * po / 1e6
+        out.append(f"| {name} (оценка на тех же токенах) | ${c:.2f} |")
 out += ["", f"## Берём ({len(by['take'])})", ""]
 out += [line(r) + "\n" for r in by["take"]] or ["—"]
 out += ["", f"## Рассмотреть ({len(by['consider'])})", ""]
