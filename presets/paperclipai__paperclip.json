@@ -1,0 +1,56 @@
+{
+  "repo": "paperclipai/paperclip",
+  "name": "Paperclip",
+  "profile": "Self-hosted Paperclip in Docker Compose (authenticated mode, one server). About 10 agents run on the claude_local adapter with a Claude subscription, a few on codex_local with a ChatGPT subscription. A CEO agent hires, configures and manages the other agents; agents work with git repositories and remote MCP servers.",
+  "areas": {
+    "claude_adapter": "Claude Code adapter (claude_local, Claude ACP bridge, Claude auth, Claude models)",
+    "codex_adapter": "Codex adapter (codex_local, Codex ACP, ChatGPT sign-in)",
+    "other_adapters": "Other agent adapters: Cursor, Gemini, OpenCode, Pi, Hermes, OpenClaw, Kimi, Grok, HTTP, process",
+    "ai_connections_auth": "AI accounts and connections, subscriptions, API keys, secrets, user login and permissions",
+    "heartbeat_runs": "Heartbeats, run scheduling, run recovery, retries, wakes, queues, liveness",
+    "issues_tasks": "Issues, tasks, comments, approvals, routines, pipelines, budgets",
+    "workspaces_git": "Execution workspaces, git checkout, worktrees, repositories, environments, sandboxes",
+    "connectors_mcp": "Connectors, MCP servers, tool gateway, plugins, skills",
+    "ui_ux": "Web UI screens, layout, styling, UX polish",
+    "onboarding": "Onboarding wizard and first-run setup",
+    "chat_channels": "Chat integrations: Slack, Telegram, email, iMessage, agent chat",
+    "deploy_selfhost": "Docker image, self-hosting, deployment, configuration, database setup",
+    "cli_api": "CLI commands and public HTTP API",
+    "docs": "Documentation only",
+    "other": "Anything else"
+  },
+  "area_labels": {
+    "claude_adapter": "Claude-адаптер",
+    "codex_adapter": "Codex-адаптер",
+    "other_adapters": "Другие адаптеры",
+    "ai_connections_auth": "AI-подключения и доступ",
+    "heartbeat_runs": "Запуски и heartbeat",
+    "issues_tasks": "Задачи и согласования",
+    "workspaces_git": "Воркспейсы и git",
+    "connectors_mcp": "Коннекторы и MCP",
+    "ui_ux": "Интерфейс",
+    "onboarding": "Онбординг",
+    "chat_channels": "Чат-каналы",
+    "deploy_selfhost": "Деплой и self-host",
+    "cli_api": "CLI и API",
+    "docs": "Документация",
+    "other": "Прочее"
+  },
+  "exclude_authors": [
+    "cryppadotta",
+    "devinfoley",
+    "nickyleach",
+    "scotttong"
+  ],
+  "community_only": false,
+  "stack_prs_url": "https://raw.githubusercontent.com/gentslava/paperclip/plus/.plus/prs.txt",
+  "stack_prs": [],
+  "finalists": 120,
+  "ollama": {
+    "enabled": true,
+    "model": "qwen3.5:9b",
+    "min_body": 200
+  },
+  "custom_areas": true,
+  "default_branch": "master"
+}
