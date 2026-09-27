@@ -5,3 +5,6 @@ __pycache__/
 data/
 server.log
 .DS_Store
+web/node_modules/
+web/dist/
+app/static/

@@ -1,0 +1,8 @@
+.git
+.venv
+**/node_modules
+app/static
+web/dist
+docs
+data
+*.log

@@ -1,0 +1,199 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/jetbrains-mono";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-heading: var(--font-sans);
+  --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  /* product colors: one saturated brand accent and soft status tints */
+  --color-brand: var(--brand);
+  --color-brand-soft: var(--brand-soft);
+  --color-take: var(--take);
+  --color-take-soft: var(--take-soft);
+  --color-consider: var(--consider);
+  --color-consider-soft: var(--consider-soft);
+  --color-skip: var(--skip);
+  --color-skip-soft: var(--skip-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-subtle: var(--subtle);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+/* Warm near-white canvas, white hairline cards, near-black ink (after Lovable, Atlas, Linear references) */
+:root {
+  --background: #fafaf9;
+  --foreground: #171717;
+  --card: #ffffff;
+  --card-foreground: #171717;
+  --popover: #ffffff;
+  --popover-foreground: #171717;
+  --primary: #171717;
+  --primary-foreground: #ffffff;
+  --secondary: #efeeec;
+  --secondary-foreground: #171717;
+  --muted: #f3f2f0;
+  --muted-foreground: #807f7c;
+  --accent: #f3f2f0;
+  --accent-foreground: #171717;
+  --destructive: #e11d48;
+  --border: rgb(20 20 18 / 0.08);
+  --input: rgb(20 20 18 / 0.14);
+  --ring: rgb(20 20 18 / 0.28);
+  --subtle: #bdbcb8;
+  --brand: #fc486c;
+  --brand-soft: rgb(252 72 108 / 0.1);
+  --take: #15803d;
+  --take-soft: #e6f6ec;
+  --consider: #a86b12;
+  --consider-soft: #fcf2da;
+  --skip: #807f7c;
+  --skip-soft: #f1f0ee;
+  --danger: #e11d48;
+  --danger-soft: #fde9ed;
+  --chart-1: #171717;
+  --chart-2: #4b4b49;
+  --chart-3: #807f7c;
+  --chart-4: #b3b2ae;
+  --chart-5: #d9d8d4;
+  --radius: 0.75rem;
+  --sidebar: #f5f4f2;
+  --sidebar-foreground: #171717;
+  --sidebar-primary: #171717;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #eae9e6;
+  --sidebar-accent-foreground: #171717;
+  --sidebar-border: rgb(20 20 18 / 0.07);
+  --sidebar-ring: rgb(20 20 18 / 0.28);
+  --glow-a: rgb(94 125 255 / 0.26);
+  --glow-b: rgb(252 72 160 / 0.2);
+  --glow-c: rgb(255 128 64 / 0.14);
+}
+
+.dark {
+  --background: #0a0b0d;
+  --foreground: #ededef;
+  --card: #141517;
+  --card-foreground: #ededef;
+  --popover: #17181b;
+  --popover-foreground: #ededef;
+  --primary: #ededef;
+  --primary-foreground: #0a0b0d;
+  --secondary: #222326;
+  --secondary-foreground: #ededef;
+  --muted: #1b1c1f;
+  --muted-foreground: #85878e;
+  --accent: #222326;
+  --accent-foreground: #ededef;
+  --destructive: #fb7185;
+  --border: rgb(255 255 255 / 0.08);
+  --input: rgb(255 255 255 / 0.14);
+  --ring: rgb(255 255 255 / 0.3);
+  --subtle: #4d4f55;
+  --take: #4ade80;
+  --take-soft: rgb(74 222 128 / 0.1);
+  --consider: #fbbf24;
+  --consider-soft: rgb(251 191 36 / 0.1);
+  --skip: #85878e;
+  --skip-soft: rgb(255 255 255 / 0.06);
+  --danger: #fb7185;
+  --danger-soft: rgb(251 113 133 / 0.12);
+  --chart-1: #ededef;
+  --chart-2: #b4b5ba;
+  --chart-3: #85878e;
+  --chart-4: #55575d;
+  --chart-5: #34363a;
+  --sidebar: #0d0e10;
+  --sidebar-foreground: #ededef;
+  --sidebar-primary: #ededef;
+  --sidebar-primary-foreground: #0a0b0d;
+  --sidebar-accent: #1b1c1f;
+  --sidebar-accent-foreground: #ededef;
+  --sidebar-border: rgb(255 255 255 / 0.07);
+  --sidebar-ring: rgb(255 255 255 / 0.3);
+  --glow-a: rgb(94 125 255 / 0.14);
+  --glow-b: rgb(252 72 160 / 0.09);
+  --glow-c: rgb(255 128 64 / 0.05);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "cv11", "ss01";
+  }
+  html {
+    @apply font-sans;
+  }
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+  ::selection {
+    background: var(--brand-soft);
+  }
+}
+
+@layer utilities {
+  /* soft mesh glow behind the project header */
+  .header-glow {
+    background:
+      radial-gradient(40% 70% at 18% 0%, var(--glow-a), transparent 70%),
+      radial-gradient(35% 60% at 55% 0%, var(--glow-b), transparent 70%),
+      radial-gradient(35% 60% at 88% 10%, var(--glow-c), transparent 70%);
+    mask-image: linear-gradient(#000 30%, transparent);
+  }
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+  .shadow-card {
+    box-shadow: 0 1px 2px rgb(20 20 18 / 0.04), 0 1px 1px rgb(20 20 18 / 0.02);
+  }
+  .shadow-float {
+    box-shadow: 0 12px 40px -12px rgb(20 20 18 / 0.18), 0 2px 6px rgb(20 20 18 / 0.04);
+  }
+}

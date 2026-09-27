@@ -161,9 +161,19 @@ ollama pull qwen3.5:9b
 ### Без Docker
 
 ```bash
+# фронт: собирается в app/static
+cd web && npm ci && npm run build && cd ..
+
+# бэкенд
 python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
 DATA_DIR=./data TYPESAFE_API_KEY=... uvicorn main:app --app-dir app --port 8000
+```
+
+### Разработка фронта
+
+```bash
+cd web && npm run dev   # Vite на :5173, /api проксируется на бэкенд :8000 (API_URL, чтобы поменять)
 ```
 
 ## Настройка
@@ -210,7 +220,9 @@ GET  /api/events                       поток событий прогона 
 
 ## Стек
 
-Python 3.12, FastAPI, чистый JavaScript без сборки, git. Данные — JSON-файлы в `DATA_DIR`, база не нужна.
+- **Фронт:** React 19, TypeScript, Vite, Tailwind CSS 4, [shadcn/ui](https://ui.shadcn.com) на Radix, TanStack Query и TanStack Table, Recharts, react-hook-form + zod, zustand, lucide, sonner.
+- **Бэкенд:** Python 3.12, FastAPI, SSE для живого прогона, git для тестового мержа.
+- **Данные:** JSON-файлы в `DATA_DIR`, база не нужна. Один Docker-образ: фронт собирается на первом этапе и отдаётся тем же FastAPI.
 
 ## Лицензия
 
