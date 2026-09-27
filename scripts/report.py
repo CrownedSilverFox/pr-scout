@@ -20,6 +20,9 @@ rows = json.loads((ROOT / "data/last-run-prs.json").read_text())
 if isinstance(rows, dict):
     rows = rows.get("rows") or []
 summary = json.loads((ROOT / "data/last-run-summary.json").read_text())
+issues = json.loads((ROOT / "data/last-run-issues.json").read_text()) if (ROOT / "data/last-run-issues.json").exists() else []
+forks = json.loads((ROOT / "data/last-run-forks.json").read_text()) if (ROOT / "data/last-run-forks.json").exists() else []
+rivals = json.loads((ROOT / "data/last-run-rivals.json").read_text()) if (ROOT / "data/last-run-rivals.json").exists() else {}
 runs = summary.get("runs") or []
 cfg = summary.get("config") or {}
 cost = sum(r.get("cost_usd") or 0 for r in runs)
@@ -81,6 +84,42 @@ out += ["", f"## Пропускаем ({len(by['skip'])})", ""]
 out += [line(r) + "\n" for r in by["skip"]] or ["—"]
 out += ["", f"## Не дошли до этапа 2 — только балл этапа 1, вердикта нет ({len(by['nofinal'])})", ""]
 out += [line(r) + "\n" for r in by["nofinal"][:30]] or ["—"]
+
+if issues:
+    open_issues = [i for i in issues if i.get("classified") and not i.get("open_pr")]
+    covered = [i for i in issues if i.get("classified") and i.get("open_pr")]
+    out += ["", f"# Issues: {len(issues)} открытых, {len(open_issues)} без единого PR", "",
+            "## Важное, на что PR нет", ""]
+    for i in open_issues[:40]:
+        out.append(f"**#{i['number']}** [{i['title']}](https://github.com/{REPO}/issues/{i['number']}) — "
+                   f"балл **{i.get('score')}**, `{i.get('kind_label')}`, серьёзность {i.get('severity')}/4, "
+                   f"частота {i.get('common_case')}, релевантность {i.get('relevance')}/3, "
+                   f"{i.get('comments')} комм. · @{i.get('author')} · обновлено {str(i.get('updated'))[:10]}\n")
+    out += ["", f"## Issues, которые уже кто-то закрывает открытым PR ({len(covered)})", ""]
+    for i in covered[:25]:
+        out.append(f"**#{i['number']}** {i['title']} — балл {i.get('score')}, PR: "
+                   + ", ".join(f"[#{n}](https://github.com/{REPO}/pull/{n})" for n in (i.get("open_pr") or [])[:6]) + "\n")
+
+if forks:
+    ahead = [f for f in forks if (f.get("ahead") or 0) > 0]
+    out += ["", f"# Форки: проверено {len(forks)}, с коммитами впереди upstream — {len(ahead)}", "",
+            "## Форки, которые стоит разобрать (в них есть работа, не отправленная в upstream)", ""]
+    for f in sorted([f for f in forks if f.get("classified")], key=lambda r: -(r.get("score") or 0))[:40]:
+        out.append(f"**[{f['fork']}](https://github.com/{f['fork']})** — балл **{f.get('score')}**, "
+                   f"`{f.get('kind_label')}`, впереди {f.get('ahead')} коммитов, позади {f.get('behind')}, "
+                   f"±{f.get('lines')} строк, ★{f.get('stars')}, пуш {str(f.get('pushed'))[:10]}, "
+                   f"ценность {f.get('value')}/4, дубль {f.get('duplicate')}, секреты {f.get('secrets')}")
+        for c in (f.get("commits") or [])[:5]:
+            out.append(f"  - `{c.get('sha')}` {c.get('date')} {c.get('message')}")
+        out.append("")
+
+if rivals:
+    out += ["", f"# Один issue — несколько PR: кого брать ({len(rivals)} групп)", ""]
+    for issue_no, r in sorted(rivals.items(), key=lambda kv: -(kv[1].get("confidence") or 0)):
+        cands = ", ".join(f"#{n}" for n in (r.get("candidates") or [])[:8])
+        verdict = f"[#{r['chosen_pr']}](https://github.com/{REPO}/pull/{r['chosen_pr']})" if r.get("chosen_pr") else "ни один"
+        out.append(f"- issue #{issue_no} ({r.get('issue_title') or '—'}): кандидаты {cands} → **берём {verdict}** "
+                   f"(уверенность {r.get('confidence')}, proper_fix {r.get('proper_fix')})\n")
 
 d = time.strftime("%Y-%m-%d")
 path = ROOT / "reports" / f"{d}-{SLUG.replace('__', '-')}.md"

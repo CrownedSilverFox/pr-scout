@@ -14,6 +14,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from queue import Queue
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
@@ -114,7 +115,7 @@ def load_project(slug):
     p = {"config": read_json(d / "config.json", None)}
     if not p["config"]:
         return
-    for name, default in (("prs", []), ("stage1", {}), ("stage2", {}), ("runs", [])):
+    for name, default in (("prs", []), ("stage1", {}), ("stage2", {}), ("runs", []), ("issues", {}), ("forks", {}), ("rivals", {})):
         p[name] = read_json(d / f"{name}.json", default)
     p["prs"] = {x["number"]: x for x in p["prs"]} if isinstance(p["prs"], list) else {int(k): v for k, v in p["prs"].items()}
     projects[slug] = p
@@ -158,6 +159,51 @@ def recompute(slug):
             if s2:
                 rows[n].update(verdict(rows[n], s2))
         P["rows"], P["finalists"] = rows, finalists
+        P["issue_rows"] = issue_rows(P)
+        P["fork_rows"] = fork_rows(P)
+
+
+def issue_rows(P):
+    """Rows for the open issues: who is already fixing them, and what Jev thinks of them."""
+    covered, mentioned = {}, {}
+    for n, pr in P["prs"].items():
+        for i in pr.get("issues") or []:
+            covered.setdefault(i, []).append(n)
+        for i in {int(x) for x in re.findall(r"#(\d+)", pr.get("body") or "")}:
+            mentioned.setdefault(i, []).append(n)
+    rows = {}
+    for k, v in (P.get("issues") or {}).items():
+        meta, res = v.get("meta"), v.get("answers")
+        if not meta:
+            continue
+        row = {kk: meta.get(kk) for kk in ("number", "title", "author", "created", "updated", "comments", "labels")}
+        row.update(classified=bool(res), open_pr=sorted(covered.get(meta["number"]) or []), kind_label=None)
+        if res:
+            row.update(score_issue(meta, res, has_pr=bool(covered.get(meta["number"])), mentioned_by=mentioned.get(meta["number"]) or ()))
+            row["kind_label"] = ISSUE_KIND_LABELS.get(row.get("kind"), row.get("kind"))
+        rows[meta["number"]] = row
+    ranked = sorted([r for r in rows.values() if r["classified"]], key=lambda r: -r["score"])
+    for i, r in enumerate(ranked, 1):
+        r["rank"] = i
+    return rows
+
+
+def fork_rows(P):
+    """Rows for the forks that carry commits upstream does not have."""
+    rows = {}
+    for k, v in (P.get("forks") or {}).items():
+        if not v.get("scanned"):
+            continue
+        row = {kk: v.get(kk) for kk in ("fork", "owner", "branch", "pushed", "stars", "ahead", "behind", "lines", "status", "truncated", "commits", "files")}
+        row["classified"] = bool(v.get("answers"))
+        if v.get("answers"):
+            row.update(score_fork(v, v["answers"]))
+            row["kind_label"] = FORK_KIND_LABELS.get(row.get("kind"), row.get("kind"))
+        rows[k] = row
+    ranked = sorted([r for r in rows.values() if r["classified"]], key=lambda r: -r["score"])
+    for i, r in enumerate(ranked, 1):
+        r["rank"] = i
+    return rows
 
 
 def get_project(slug):
@@ -538,25 +584,73 @@ def stage2_job(slug):
             git("merge", "--abort")
             emit({"type": "log", "message": f"#{n} из «уже взятых» не вливается в свежую {base}"})
     merges, diffs = {}, {}
-    for i, n in enumerate(finalists, 1):
-        if git("fetch", "-q", "origin", f"pull/{n}/head:pr-{n}").returncode:
-            merges[n] = {"merge": "fetch_failed", "conflicts": []}
-        else:
-            m = git("merge", "--no-commit", "--no-ff", f"pr-{n}")
-            conflicts = git("diff", "--name-only", "--diff-filter=U").stdout.split() if m.returncode else []
-            git("merge", "--abort"); git("reset", "-q", "--hard"); git("clean", "-fdq")
-            merges[n] = {"merge": "clean" if m.returncode == 0 else ("conflict" if conflicts else "error"), "conflicts": conflicts[:10],
-                         **({"message": (m.stderr or m.stdout)[-240:]} if m.returncode and not conflicts else {})}
-            mb = git("merge-base", f"origin/{base}", f"pr-{n}").stdout.strip()
-            chunks = [c for c in re.split(r"(?=^diff --git )", git("diff", mb, f"pr-{n}").stdout if mb else "", flags=re.M)
-                      if c.strip() and not SKIP_FILE.search(c.split("\n", 1)[0])]
-            chunks.sort(key=lambda c: ("test" in c.split("\n", 1)[0].lower(), len(c)))
-            text = ""
-            for c in chunks:
-                if len(text) + len(c) <= 90_000:
-                    text += c
-            diffs[n] = text or "(empty diff)"
-        progress(i, len(finalists), n, phase="merge", merge=merges[n]["merge"])
+    # Ветки PR качаем параллельно: 120 последовательных fetch — это минуты ожидания сети.
+    with cf.ThreadPoolExecutor(MERGE_WORKERS) as ex:
+        for n, failed in ex.map(lambda n: (n, git("fetch", "-q", "origin", f"pull/{n}/head:pr-{n}").returncode != 0), finalists):
+            if failed:
+                merges[n] = {"merge": "fetch_failed", "conflicts": []}
+
+    # Тестовый мерж каждого финалиста идёт в своей рабочей копии: параллельные merge в одном
+    # дереве топчут друг друга (upstream делал это последовательно — 32 минуты из 48 на 3000 PR).
+    stack_sha = git("rev-parse", "stack").stdout.strip()
+    git("worktree", "prune")
+    pool = Queue()
+    worktrees = []
+    for i in range(max(1, MERGE_WORKERS)):
+        wt = repo.parent / f"merge-{i}"
+        if wt.exists():
+            subprocess.run(["git", "-C", str(repo), "worktree", "remove", "--force", str(wt)], capture_output=True, text=True)
+        r = subprocess.run(["git", "-C", str(repo), "worktree", "add", "--detach", "--force", str(wt), stack_sha], capture_output=True, text=True)
+        if r.returncode:
+            emit({"type": "log", "message": f"worktree {wt.name} не создался: {r.stderr[-200:]}"})
+            continue
+        worktrees.append(wt)
+        pool.put(wt)
+
+    def wgit(wt, *args):
+        return subprocess.run(["git", "-C", str(wt), *args], capture_output=True, text=True)
+
+    def test_merge(args):
+        i, n = args
+        if n in merges:  # ветка не скачалась
+            progress(i, len(finalists), n, phase="merge", merge=merges[n]["merge"])
+            return n, merges[n], diff_of(n)
+        wt = pool.get()
+        try:
+            wgit(wt, "reset", "-q", "--hard", stack_sha)
+            wgit(wt, "clean", "-fdq")
+            m = wgit(wt, "merge", "--no-commit", "--no-ff", f"pr-{n}")
+            conflicts = wgit(wt, "diff", "--name-only", "--diff-filter=U").stdout.split() if m.returncode else []
+            wgit(wt, "merge", "--abort")
+            wgit(wt, "reset", "-q", "--hard", stack_sha)
+            wgit(wt, "clean", "-fdq")
+            res = {"merge": "clean" if m.returncode == 0 else ("conflict" if conflicts else "error"), "conflicts": conflicts[:10],
+                   **({"message": (m.stderr or m.stdout)[-240:]} if m.returncode and not conflicts else {})}
+        finally:
+            pool.put(wt)
+        progress(i, len(finalists), n, phase="merge", merge=res["merge"])
+        return n, res, diff_of(n)
+
+    def diff_of(n):
+        """Diff of the PR against its merge base. Read-only: safe to run in parallel."""
+        mb = git("merge-base", "stack", f"pr-{n}").stdout.strip()
+        chunks = [c for c in re.split(r"(?=^diff --git )", git("diff", mb, f"pr-{n}").stdout if mb else "", flags=re.M)
+                  if c.strip() and not SKIP_FILE.search(c.split("\n", 1)[0])]
+        chunks.sort(key=lambda c: ("test" in c.split("\n", 1)[0].lower(), len(c)))
+        text = ""
+        for c in chunks:
+            if len(text) + len(c) <= 90_000:
+                text += c
+        return text or "(empty diff)"
+
+    try:
+        with cf.ThreadPoolExecutor(max(1, len(worktrees))) as ex:
+            for n, res, text in ex.map(test_merge, [(i, n) for i, n in enumerate(finalists, 1)]):
+                merges[n], diffs[n] = res, text
+    finally:
+        for wt in worktrees:
+            subprocess.run(["git", "-C", str(repo), "worktree", "remove", "--force", str(wt)], capture_output=True, text=True)
+        git("worktree", "prune")
 
     def ci_status(n, previous):
         if not GH_TOKEN:
@@ -587,6 +681,253 @@ def stage2_job(slug):
     recompute(slug)
     return {"stage": "stage2", "started": started, "seconds": round(time.time() - t0), "items": len(finalists), "errors": 0,
             "input_tokens": tokens, "cost_usd": round(tokens * PRICE_PER_MTOK / 1e6, 4), "model": "jev-latest"}
+
+
+# ---------- issues, forks, rivals: the same Jev, three more questions ----------
+GQL_ISSUES = """query($owner:String!,$name:String!,$cursor:String){repository(owner:$owner,name:$name){
+ issues(states:OPEN,first:50,after:$cursor,orderBy:{field:UPDATED_AT,direction:DESC}){
+  pageInfo{hasNextPage endCursor}
+  nodes{number title body createdAt updatedAt comments{totalCount} authorAssociation author{login}
+   labels(first:10){nodes{name}}}}}}"""
+
+GQL_FORKS = """query($owner:String!,$name:String!,$cursor:String){repository(owner:$owner,name:$name){
+ forks(first:100,after:$cursor,orderBy:{field:PUSHED_AT,direction:DESC}){
+  pageInfo{hasNextPage endCursor}
+  nodes{nameWithOwner name pushedAt stargazerCount isFork owner{login}
+   defaultBranchRef{name target{... on Commit{oid}}}}}}}"""
+
+
+def fetch_issues_job(slug):
+    """All open issues of the upstream repository (metadata only, no Jev yet)."""
+    P, t0, started = projects[slug], time.time(), now_iso()
+    cfg, owner, name = P["config"], *P["config"]["repo"].split("/")
+    excluded = set(cfg.get("exclude_authors") or [])
+    issues, cursor, page = {}, None, 0
+    while True:
+        res = http_json_retry("https://api.github.com/graphql", {"query": GQL_ISSUES, "variables": {"owner": owner, "name": name, "cursor": cursor}},
+                              gh_headers({"Content-Type": "application/json"}), 120)
+        if res.get("errors"):
+            raise RuntimeError("GitHub: " + "; ".join(e.get("message", "") for e in res["errors"])[:300])
+        conn = (res.get("data") or {}).get("repository", {}).get("issues")
+        if not conn:
+            raise RuntimeError("Репозиторий не найден или приватный")
+        for i in conn["nodes"]:
+            author = (i.get("author") or {}).get("login") or "ghost"
+            if author in excluded:
+                continue
+            issues[i["number"]] = {"number": i["number"], "title": i["title"], "body": clean_body(i["body"]), "author": author,
+                                   "association": i["authorAssociation"], "created": i["createdAt"], "updated": i["updatedAt"],
+                                   "comments": i["comments"]["totalCount"], "labels": [x["name"] for x in i["labels"]["nodes"]]}
+        page += 1
+        progress(len(issues), len(issues), phase="issues-list", page=page)
+        if not conn["pageInfo"]["hasNextPage"]:
+            break
+        cursor = conn["pageInfo"]["endCursor"]
+    with lock:
+        old = P.get("issues") or {}
+        P["issues"] = {str(n): {**old.get(str(n), {}), "meta": m} for n, m in issues.items()}
+        save(slug, "issues")
+    recompute(slug)
+    return {"stage": "issues-list", "started": started, "seconds": round(time.time() - t0), "items": len(issues), "errors": 0,
+            "input_tokens": 0, "cost_usd": 0, "model": "GitHub GraphQL"}
+
+
+def issues_job(slug):
+    """Ask Jev what every open issue is and how much it hurts — including issues no PR touches."""
+    P, t0, started = projects[slug], time.time(), now_iso()
+    questions = issue_questions(P["config"])
+    todo = [n for n, v in P["issues"].items() if v.get("meta")]
+    tokens, done, errors = 0, 0, 0
+    progress(0, len(todo), phase="issues")
+    with cf.ThreadPoolExecutor(STAGE1_WORKERS) as ex:
+        futures = {ex.submit(jev, {"repo": P["config"]["repo"], "number": v["meta"]["number"], "title": v["meta"]["title"],
+                                   "labels": v["meta"]["labels"], "created": v["meta"]["created"], "comments": v["meta"]["comments"],
+                                   "description": (v["meta"]["body"] or "(no description)")[:2500]}, questions): int(n)
+                   for n, v in ((n, v) for n, v in P["issues"].items() if v.get("meta"))}
+        for fut in cf.as_completed(futures):
+            n, res = futures[fut], fut.result()
+            done += 1
+            if "answers" in res:
+                tokens += res["usage"]["input_tokens"]
+                with lock:
+                    P["issues"][str(n)]["answers"] = res["answers"]
+                    P["issues"][str(n)]["usage"] = res["usage"]
+            else:
+                errors += 1
+            progress(done, len(todo), n, phase="issues", tokens=tokens, seconds=round(time.time() - t0, 1))
+    with lock:
+        save(slug, "issues")
+    recompute(slug)
+    return {"stage": "issues", "started": started, "seconds": round(time.time() - t0), "items": len(todo), "errors": errors,
+            "input_tokens": tokens, "cost_usd": round(tokens * PRICE_PER_MTOK / 1e6, 4), "model": "Jev"}
+
+
+def fetch_forks_job(slug):
+    """The fork list of the upstream repository: who forked, when they last pushed, their head commit."""
+    P, t0, started = projects[slug], time.time(), now_iso()
+    owner, name = P["config"]["repo"].split("/")
+    forks, cursor, page = {}, None, 0
+    while True:
+        res = http_json_retry("https://api.github.com/graphql", {"query": GQL_FORKS, "variables": {"owner": owner, "name": name, "cursor": cursor}},
+                              gh_headers({"Content-Type": "application/json"}), 120)
+        if res.get("errors"):
+            raise RuntimeError("GitHub: " + "; ".join(e.get("message", "") for e in res["errors"])[:300])
+        conn = (res.get("data") or {}).get("repository", {}).get("forks")
+        if not conn:
+            raise RuntimeError("Репозиторий не найден или приватный")
+        for f in conn["nodes"]:
+            branch = (f.get("defaultBranchRef") or {})
+            forks[f["nameWithOwner"]] = {"fork": f["nameWithOwner"], "owner": (f.get("owner") or {}).get("login"),
+                                         "pushed": f["pushedAt"], "stars": f["stargazerCount"],
+                                         "branch": branch.get("name"), "oid": ((branch.get("target") or {}) or {}).get("oid")}
+        page += 1
+        progress(len(forks), len(forks), phase="forks-list", page=page)
+        if not conn["pageInfo"]["hasNextPage"]:
+            break
+        cursor = conn["pageInfo"]["endCursor"]
+    with lock:
+        old = P.get("forks") or {}
+        P["forks"] = {k: {**old.get(k, {}), **v} for k, v in forks.items()}
+        save(slug, "forks")
+    recompute(slug)
+    return {"stage": "forks-list", "started": started, "seconds": round(time.time() - t0), "items": len(forks), "errors": 0,
+            "input_tokens": 0, "cost_usd": 0, "model": "GitHub GraphQL"}
+
+
+def forks_job(slug):
+    """Compare every fork with upstream and ask Jev about the commits it has ahead.
+
+    One compare request per fork; the REST budget is 5000/h, so the walk spans several
+    hourly windows by design (gh_rest sleeps to the reset instead of failing).
+    """
+    P, t0, started = projects[slug], time.time(), now_iso()
+    cfg = P["config"]
+    fcfg = cfg.get("forks") or {}
+    owner, name = cfg["repo"].split("/")
+    base = cfg.get("default_branch") or "main"
+    forks = [f for f in P["forks"].values() if f.get("branch")]
+    forks.sort(key=lambda f: f.get("pushed") or "", reverse=True)
+    if fcfg.get("limit"):
+        forks = forks[: int(fcfg["limit"])]
+    if fcfg.get("min_stars"):
+        forks = [f for f in forks if (f.get("stars") or 0) >= int(fcfg["min_stars"])]
+    todo = [f for f in forks if not f.get("scanned")]
+    progress(0, len(todo), phase="forks-compare")
+    errs = 0
+    t0 = time.time()
+
+    def compare(f):
+        fork_owner, fork_repo = f["fork"].split("/")
+        path = f"/repos/{owner}/{name}/compare/{base}...{fork_owner}:{f['branch']}"
+        res = gh_rest(path)
+        if res.get("error"):
+            return f, {"status": res["error"], "ahead": 0, "behind": 0, "commits": [], "files": [], "lines": 0}
+        commits = [{"sha": c["sha"][:8], "date": (c.get("commit", {}).get("author") or {}).get("date", "")[:10],
+                    "message": (c.get("commit", {}).get("message") or "").split("\n")[0][:200]} for c in (res.get("commits") or [])]
+        lines = sum((x.get("additions") or 0) + (x.get("deletions") or 0) for x in (res.get("files") or []))
+        return f, {"status": res.get("status"), "ahead": res.get("ahead_by", 0), "behind": res.get("behind_by", 0),
+                   "truncated": bool(res.get("total_commits", 0) > len(commits)),
+                   "commits": commits[-int(fcfg.get("max_commits", 30)):], "files": [x["filename"] for x in (res.get("files") or [])][:20],
+                   "lines": lines, "scanned": now_iso()}
+
+    done = 0
+    with cf.ThreadPoolExecutor(FORK_REST_WORKERS) as ex:
+        for fut in cf.as_completed([ex.submit(compare, f) for f in todo]):
+            f, res = fut.result()
+            done += 1
+            with lock:
+                P["forks"][f["fork"]].update(res)
+                if done % 25 == 0:
+                    save(slug, "forks")
+            progress(done, len(todo), phase="forks-compare", ahead=sum(1 for v in P["forks"].values() if (v.get("ahead") or 0) > 0),
+                     seconds=round(time.time() - t0, 1))
+    ahead = [f for f in P["forks"].values() if (f.get("ahead") or 0) > 0 and f.get("commits")]
+    questions = fork_questions(cfg)
+    tokens, errs = 0, 0
+    progress(0, len(ahead), phase="forks")
+    t0 = time.time()
+    with cf.ThreadPoolExecutor(STAGE1_WORKERS) as ex:
+        futures = {ex.submit(jev, {"repo": cfg["repo"], "fork": f["fork"], "behind_upstream_by": f.get("behind"),
+                                   "commits": f["commits"], "files": f.get("files")}, questions): f["fork"] for f in ahead}
+        for fut in cf.as_completed(futures):
+            key, res = futures[fut], fut.result()
+            done += 1
+            if "answers" in res:
+                tokens += res["usage"]["input_tokens"]
+                with lock:
+                    P["forks"][key]["answers"] = res["answers"]
+                    P["forks"][key]["usage"] = res["usage"]
+            else:
+                errs += 1
+            progress(done, len(ahead), phase="forks", tokens=tokens, seconds=round(time.time() - t0, 1))
+    with lock:
+        save(slug, "forks")
+    recompute(slug)
+    return {"stage": "forks", "started": started, "seconds": round(time.time() - t0), "items": len(todo), "errors": errs,
+            "input_tokens": tokens, "cost_usd": round(tokens * PRICE_PER_MTOK / 1e6, 4), "model": "GitHub compare + Jev"}
+
+
+def rivals_job(slug):
+    """One issue, several pull requests: ask Jev which one to take."""
+    P, t0, started = projects[slug], time.time(), now_iso()
+    cfg = P["config"]
+    groups = {}
+    for n, pr in P["prs"].items():
+        for i in (pr.get("issues") or []):
+            groups.setdefault(i, []).append(n)
+    todo = {i: sorted(v, key=lambda n: -(P["rows"].get(n, {}).get("score") or 0)) for i, v in groups.items() if len(v) > 1}
+    rivals, tokens, errors, done = {}, 0, 0, 0
+    progress(0, len(todo), phase="rivals")
+    questions = None
+
+    def ask(item):
+        issue_no, nums = item
+        meta = (P["issues"].get(str(issue_no)) or {}).get("meta") or {"number": issue_no, "title": f"issue #{issue_no}", "body": ""}
+        cands = []
+        for n in nums[:8]:
+            row = {**P["rows"].get(n, {}), "number": n, "auto": is_bot(P["prs"][n].get("author"))}
+            s2 = P["stage2"].get(str(n)) or {}
+            if s2.get("review"):
+                row["review"] = {k: round(v, 2) for k, v in _review_numbers(s2["review"]["answers"]).items()}
+                row["merge_status"] = (s2.get("merge") or {}).get("merge")
+            cands.append(row)
+        q, body = rival_question(cfg, {**meta, "body": (meta.get("body") or "")[:1200]}, cands)
+        return issue_no, meta, cands, q
+
+    prepared = [ask(item) for item in todo.items()]
+    with cf.ThreadPoolExecutor(STAGE1_WORKERS) as ex:
+        futures = {}
+        for issue_no, meta, cands, q in prepared:
+            futures[ex.submit(jev, {"repo": cfg["repo"], "issue": {"number": meta["number"], "title": meta["title"],
+                                                                   "description": (meta.get("body") or "")[:1200]},
+                                    "candidates": [c["title"] for c in cands]}, q)] = (issue_no, meta)
+        for fut in cf.as_completed(futures):
+            (issue_no, meta), res = futures[fut], fut.result()
+            done += 1
+            if "answers" in res:
+                tokens += res["usage"]["input_tokens"]
+                with lock:
+                    rivals[str(issue_no)] = {**apply_rival(res["answers"], meta), "candidates": todo[issue_no], "usage": res["usage"]}
+            else:
+                errors += 1
+            progress(done, len(todo), issue_no, phase="rivals", tokens=tokens, seconds=round(time.time() - t0, 1))
+    with lock:
+        P["rivals"] = rivals
+        save(slug, "rivals")
+    recompute(slug)
+    return {"stage": "rivals", "started": started, "seconds": round(time.time() - t0), "items": len(todo), "errors": errors,
+            "input_tokens": tokens, "cost_usd": round(tokens * PRICE_PER_MTOK / 1e6, 4), "model": "Jev"}
+
+
+BOT_AUTHORS = re.compile(r"(\[bot\]$|-bot$|^dependabot|^renovate|^github-actions)", re.I)
+
+
+def is_bot(author):
+    return bool(BOT_AUTHORS.search(author or ""))
+
+
+def _review_numbers(answers):
+    return {k: v.get("score", v.get("noul", 0)) for k, v in answers.items()}
 
 
 # ---------- API ----------
@@ -646,6 +987,9 @@ async def update_config(slug: str, request: Request):
         for k in ("name", "profile", "community_only", "include_drafts", "finalists", "stack_prs_url"):
             if k in body:
                 cfg[k] = body[k]
+        for k in ("forks", "triage"):
+            if k in body:
+                cfg[k] = {**cfg.get(k, {}), **body[k]}
         if "exclude_authors" in body:
             cfg["exclude_authors"] = [a.strip() for a in re.split(r"[,\s]+", body["exclude_authors"]) if a.strip()] if isinstance(body["exclude_authors"], str) else body["exclude_authors"]
         if "stack_prs" in body:
@@ -691,9 +1035,42 @@ def summary(slug: str):
     P = get_project(slug)
     with lock:
         rows = list(P["rows"].values())
+        issues = list((P.get("issue_rows") or {}).values())
+        forks = list((P.get("fork_rows") or {}).values())
         return {"total": len(rows), "classified": sum(r["classified"] for r in rows), "finalists": len(P["finalists"]),
                 "included": sorted(P["included"]), "runs": P["runs"], "job": dict(job), "config": P["config"],
+                "issues": {"total": len(issues), "classified": sum(r["classified"] for r in issues),
+                           "without_pr": sum(1 for r in issues if r["classified"] and not r.get("open_pr")),
+                           "ranked": sorted([r for r in issues if r["classified"]], key=lambda r: -(r.get("score") or 0))[:20]},
+                "forks": {"scanned": len(forks), "ahead": sum(1 for r in forks if (r.get("ahead") or 0) > 0),
+                          "classified": sum(r["classified"] for r in forks),
+                          "total": len(P.get("forks") or {}),
+                          "ranked": sorted([r for r in forks if r["classified"]], key=lambda r: -(r.get("score") or 0))[:20]},
+                "rivals": {"groups": len(P.get("rivals") or {}),
+                           "picked": sum(1 for r in (P.get("rivals") or {}).values() if r.get("chosen_pr")),
+                           "list": list((P.get("rivals") or {}).values())},
                 "jev_ready": bool(JEV_KEY), "github_ready": bool(GH_TOKEN), "comparison": cost_comparison(P["runs"])}
+
+
+@app.get("/api/p/{slug}/issues")
+def list_issues(slug: str):
+    P = get_project(slug)
+    with lock:
+        return sorted((P.get("issue_rows") or {}).values(), key=lambda r: -(r.get("score") or 0))
+
+
+@app.get("/api/p/{slug}/forks")
+def list_forks(slug: str):
+    P = get_project(slug)
+    with lock:
+        return sorted((P.get("fork_rows") or {}).values(), key=lambda r: -(r.get("score") or 0))
+
+
+@app.get("/api/p/{slug}/rivals")
+def list_rivals(slug: str):
+    P = get_project(slug)
+    with lock:
+        return (P.get("rivals") or {})
 
 
 @app.get("/api/p/{slug}/criteria")
@@ -711,13 +1088,17 @@ def get_ollama_models():
 @app.post("/api/p/{slug}/jobs/{name}")
 async def start_job(slug: str, name: str, request: Request):
     get_project(slug)
-    if name in ("stage1", "stage2", "full") and not JEV_KEY:
+    if name not in ("fetch", "describe") and not JEV_KEY:
         raise HTTPException(400, "Не задан ключ Jev (TYPESAFE_API_KEY или NORDROUTER_API_KEY)")
     body = await request.json() if request.headers.get("content-length") not in (None, "0") else {}
     pipelines = {
         "full": [fetch_job, describe_job, stage1_job, stage2_job],
+        "everything": [fetch_job, describe_job, stage1_job, stage2_job, fetch_issues_job, issues_job, rivals_job, fetch_forks_job, forks_job],
         "fetch": [fetch_job], "describe": [describe_job], "stage2": [stage2_job],
         "stage1": [(lambda s: stage1_job(s, body.get("limit")))],
+        "issues": [fetch_issues_job, issues_job], "issues_meta": [fetch_issues_job], "issues_jev": [issues_job],
+        "forks": [fetch_forks_job, forks_job], "forks_meta": [fetch_forks_job], "forks_compare": [forks_job],
+        "rivals": [rivals_job],
     }
     if name not in pipelines:
         raise HTTPException(404)

@@ -18,6 +18,8 @@ services:
       # NordRouter allows 15 rps on /v1/evaluate
       JEV_STAGE1_WORKERS: ${JEV_STAGE1_WORKERS:-14}
       JEV_STAGE2_WORKERS: ${JEV_STAGE2_WORKERS:-10}
+      JEV_MERGE_WORKERS: ${JEV_MERGE_WORKERS:-6}
+      FORK_REST_WORKERS: ${FORK_REST_WORKERS:-10}
       # Descriptions of near-empty PRs through NordRouter instead of a local Ollama
       NORDROUTER_URL: ${NORDROUTER_URL:-https://nordrouter.com}
       DESCRIBER_MODEL: ${DESCRIBER_MODEL:-google/gemini-3.1-flash-lite}
