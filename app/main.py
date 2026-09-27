@@ -838,26 +838,34 @@ def fork_heads(forks):
     """head-коммит каждого форка — батчами по 50 репозиториев в одном GraphQL-запросе.
 
     Один запрос на 50 форков вместо сравнения каждого: 1200 форков уложились в 5 запросов.
+    Батчи независимы, поэтому идут параллельно (FORK_LIST_WORKERS), иначе 312 запросов
+    на 15.6к форков выстраиваются в очередь на десяток минут.
     Удалённые и пустые репозитории приходят как NOT_FOUND — такие форки пропускаем.
     """
-    heads, batch = {}, 50
-    for i in range(0, len(forks), batch):
-        group = [f for f in forks[i:i + batch] if f.get("branch")]
+    batch = 50
+    groups = [[f for f in forks[i:i + batch] if f.get("branch")] for i in range(0, len(forks), batch)]
+    groups = [g for g in groups if g]
+    heads = {}
+
+    def one(group):
         parts = []
         for j, f in enumerate(group):
             owner, name = f["fork"].split("/")
             parts.append(f'r{j}: repository(owner:"{owner}",name:"{name}")'
                          f'{{object(expression:"{f["branch"]}"){{... on Commit{{oid}}}}}}')
-        if not parts:
-            continue
         res = http_json_retry("https://api.github.com/graphql", {"query": "query{" + " ".join(parts) + "}"},
                               gh_headers({"Content-Type": "application/json"}), 120)
         data = res.get("data") or {}
+        out = {}
         for j, f in enumerate(group):
-            repo = data.get(f"r{j}")
-            obj = (repo or {}).get("object") or {}
-            heads[f["fork"]] = obj.get("oid")
-        progress(len(heads), len(forks), phase="forks-heads")
+            obj = ((data.get(f"r{j}") or {}).get("object") or {})
+            out[f["fork"]] = obj.get("oid")
+        return out
+
+    with cf.ThreadPoolExecutor(FORK_LIST_WORKERS) as ex:
+        for i, chunk in enumerate(ex.map(one, groups)):
+            heads.update(chunk)
+            progress(len(heads), len(forks), phase="forks-heads")
     return heads
 
 
