@@ -1,8 +1,10 @@
 <div align="center">
 
-<img src="web/public/logo.svg" width="84" alt="PR Scout">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/brand/pr-scout-lockup-dark.svg">
+  <img src="docs/brand/pr-scout-lockup.svg" width="560" alt="PR Scout — find the PRs worth your time">
+</picture>
 
-# PR Scout
 
 **Какие pull request стоит взять — за пару минут и 30 центов вместо дня ревью.**
 

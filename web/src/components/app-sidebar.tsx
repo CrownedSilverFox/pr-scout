@@ -11,7 +11,7 @@ import { api, keys } from "@/lib/api"
 import { avatarUrl, fmt } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { useApp } from "@/store/app"
-import logo from "@/assets/logo.svg"
+import { LogoMark } from "@/components/logo-mark"
 
 export function AppSidebar() {
   const projects = useQuery({ queryKey: keys.projects, queryFn: api.projects })
@@ -24,7 +24,7 @@ export function AppSidebar() {
     <Sidebar>
       <SidebarHeader className="px-4 pt-5 pb-4">
         <a href="#" className="flex items-center gap-2.5 text-[16px] font-semibold tracking-tight">
-          <img src={logo} alt="" className="size-8" /> PR Scout
+          <LogoMark bg="var(--sidebar)" /> PR Scout
         </a>
       </SidebarHeader>
       <SidebarContent>

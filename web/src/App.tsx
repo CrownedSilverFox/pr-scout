@@ -22,7 +22,7 @@ import { api, keys } from "@/lib/api"
 import { fmt } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { useApp, type Tab } from "@/store/app"
-import logo from "@/assets/logo.svg"
+import { LogoMark } from "@/components/logo-mark"
 
 export default function App() {
   useServerEvents()
@@ -112,7 +112,7 @@ function Welcome() {
   const setAddOpen = useApp((s) => s.setAddOpen)
   return (
     <div className="mx-auto my-[16vh] max-w-2xl px-6 text-center">
-      <img src={logo} alt="" className="mx-auto size-16" />
+      <LogoMark className="mx-auto size-20" />
       <h1 className="mt-6 text-5xl font-semibold tracking-[-0.04em]">Какие PR стоит взять?</h1>
       <p className="mt-4 text-[16.5px] leading-relaxed text-foreground/70">
         PR Scout собирает все открытые pull request репозитория, дописывает пустые описания локальной моделью и за пару минут раскладывает их через Jev:
