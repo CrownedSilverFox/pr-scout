@@ -54,11 +54,10 @@ function toast(text, kind = "") {
   setTimeout(() => { el.style.transition = "opacity .3s"; el.style.opacity = "0"; setTimeout(() => el.remove(), 300); }, 4200);
 }
 
-function ring(score, size = 46) {
-  const r = size / 2 - 4, c = 2 * Math.PI * r, v = Math.max(0, Math.min(100, score || 0));
-  const color = v >= 50 ? "var(--ink)" : "var(--faint)";
-  return `<div class="ring ${size > 60 ? "lg" : ""}"><svg width="${size}" height="${size}"><circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="var(--surface-3)" stroke-width="3"/>
-    <circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="${color}" stroke-width="3" stroke-dasharray="${(c * v) / 100} ${c}"/></svg><span class="v">${fmt(v)}</span></div>`;
+function ring(score, size = 44) {
+  const sw = size > 60 ? 4 : 3, r = (size - sw) / 2 - 1, c = 2 * Math.PI * r, v = Math.max(0, Math.min(100, score || 0)), m = size / 2;
+  return `<div class="ring ${size > 60 ? "lg" : ""}" style="width:${size}px;height:${size}px"><svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}"><circle cx="${m}" cy="${m}" r="${r}" fill="none" stroke="var(--surface-3)" stroke-width="${sw}"/>
+    <circle cx="${m}" cy="${m}" r="${r}" fill="none" stroke="var(--ink)" stroke-width="${sw}" stroke-linecap="round" stroke-dasharray="${(c * v) / 100} ${c}"/></svg><span class="v">${fmt(v)}</span></div>`;
 }
 const meter = (v, max) => `<span class="meter"><i><b style="width:${Math.max(0, Math.min(100, (v / max) * 100))}%"></b></i>${fmt(v, 1)}</span>`;
 
@@ -149,7 +148,7 @@ function renderPipeline(live) {
     const pct = active && live?.total ? (live.done / live.total) * 100 : 0;
     return `<div class="step ${active ? "active" : r ? "done" : ""}"><span class="idx">0${i + 1}</span>
       <div class="top"><div class="ico">${I[s.ico]}</div><div><div class="t">${s.t}</div><div class="by">${s.by}</div></div></div>
-      <div class="meta">${active ? "▸ " : ""}${meta}</div><div class="bar" style="width:${pct}%"></div></div>`;
+      <div class="meta">${active ? '<i class="live-dot"></i>' : ""}${meta}</div><div class="bar" style="width:${pct}%"></div></div>`;
   }).join("");
 }
 
@@ -230,7 +229,7 @@ function renderGrid() {
   $("#grid-body").innerHTML = rows.slice(0, S.shown).map((r) => `<tr data-n="${r.number}">
     <td class="n muted mono">${r.rank ?? ""}</td>
     <td><div class="ttl">${esc(r.title)}</div><div class="sub"><span class="mono">#${r.number}</span><span>@${esc(r.author)}</span>
-      ${r.included ? '<span class="chip brand">уже взят</span>' : ""}${r.duplicate_of ? `<span class="chip line">дубль #${r.duplicate_of}</span>` : ""}${r.ai_description ? '<span class="chip brand">✎ ИИ</span>' : ""}</div></td>
+      ${r.included ? '<span class="chip ink">уже взят</span>' : ""}${r.duplicate_of ? `<span class="chip line">дубль #${r.duplicate_of}</span>` : ""}${r.ai_description ? '<span class="chip brand">✎ ИИ</span>' : ""}</div></td>
     <td><span class="chip">${esc(kindLabel(r.kind))}</span></td><td class="muted">${esc(areaLabel(r.area))}</td>
     <td>${meter(r.relevance, 3)}</td><td>${r.track === "fix" ? meter(r.harm, 1) : '<span class="muted">—</span>'}</td><td>${r.track === "feature" ? meter(r.feature_value, 4) : '<span class="muted">—</span>'}</td>
     <td class="n score">${fmt(r.score, 1)}</td><td>${r.verdict ? `<span class="chip ${r.verdict}">${VERDICT[r.verdict]}</span>` : ""}</td></tr>`).join("")
@@ -287,7 +286,7 @@ function renderCriteria() {
     const ins = typeof x.instructions === "string" ? x.instructions : x.instructions.question;
     const crit = Array.isArray(x.criteria) ? `<ol start="0">${x.criteria.map((y) => `<li>${esc(y)}</li>`).join("")}</ol>`
       : x.criteria ? `<ul>${Object.entries(x.criteria).slice(0, 16).map(([k, v]) => `<li><span class="mono">${esc(k)}</span> — ${esc(v)}</li>`).join("")}</ul>` : "";
-    return `<div class="q"><div class="h"><span>${esc(L[key] || key)}</span><span class="chip brand">${x.type}</span></div><div class="ins">${esc(ins)}</div>${crit}</div>`;
+    return `<div class="q"><div class="h"><span>${esc(L[key] || key)}</span><span class="chip mono">${x.type}</span></div><div class="ins">${esc(ins)}</div>${crit}</div>`;
   };
   $("#criteria").innerHTML = `<div class="crit-head">
       <div class="panel"><div class="panel-h"><h3>Как работает Jev</h3></div><div class="muted" style="font-size:13px;line-height:1.6">Jev (TypeSafe) — не чат-модель. Он получает «состояние» (здесь — PR) и набор типизированных вопросов и возвращает по каждому вероятности:
@@ -395,7 +394,15 @@ function syncButtons() {
 function onEvent(ev) {
   if (ev.type === "hello") { S.job = ev.job.running ? ev.job : null; syncButtons(); return; }
   if (ev.type === "start") { S.job = { running: ev.job, project: ev.project }; syncButtons(); renderSidebar(); if (ev.project === S.slug) { resetLive(); renderPipeline(); } return; }
-  if (ev.type === "step") { S.job = { running: ev.job, project: ev.project }; if (ev.project === S.slug) { S.live = { ...S.live, done: 0, total: 0, seconds: 0 }; renderPipeline(S.live); renderRunHero(); } return; }
+  if (ev.type === "step") {
+    S.job = { running: ev.job, project: ev.project };
+    if (ev.project === S.slug) {
+      S.live = { ...S.live, done: 0, total: 0, seconds: 0 }; renderPipeline(S.live); renderRunHero();
+      // the previous step has just finished and written its run: pick it up so it stops saying "not run yet"
+      api(P("/summary")).then((sum) => { if (ev.project !== S.slug) return; S.summary = sum; renderPipeline(S.live); }).catch(() => {});
+    }
+    return;
+  }
   if (ev.type === "log") { if (S.live) S.live.msg = ev.message; renderRunHero(); return; }
   if (ev.type === "done" || ev.type === "error") {
     S.job = null; syncButtons(); renderSidebar();
@@ -411,7 +418,7 @@ function onEvent(ev) {
     const r = ev.row;
     S.live.hist = [...(S.live.hist || []), r.score]; S.live.areas[r.area] = (S.live.areas[r.area] || 0) + 1;
     feed.insertAdjacentHTML("afterbegin", `<div class="it" data-n="${r.number}"><span class="mono muted">#${r.number}</span><div><div class="t">${esc(r.title)}</div><div class="d"><span class="chip">${TRACK[r.track]}</span> <span class="chip line">${esc(areaLabel(r.area))}</span></div></div>${ring(r.score, 40)}</div>`);
-    if (S.live.hist.length % 8 === 0 || ev.done === ev.total) { $("#live-hist").innerHTML = hist(S.live.hist); $("#live-area").innerHTML = hbars(S.live.areas, areaLabel); }
+    if (S.live.hist.length < 40 || S.live.hist.length % 8 === 0 || ev.done === ev.total) { $("#live-hist").innerHTML = hist(S.live.hist); $("#live-area").innerHTML = hbars(S.live.areas, areaLabel); }
   } else if (ev.phase === "describe" && ev.preview) {
     feed.insertAdjacentHTML("afterbegin", `<div class="it" data-n="${ev.number}"><span class="mono muted">#${ev.number}</span><div><div class="t">${esc(ev.title || "")}</div><div class="d">✎ ${esc(ev.preview)}…</div></div><span class="chip brand">Ollama</span></div>`);
   } else if (ev.phase === "merge") {
@@ -478,3 +485,6 @@ loadStatus();
 $("#pipeline").innerHTML = STEPS.map(() => '<div class="step skeleton" style="height:92px"></div>').join("");
 $("#kpis").innerHTML = new Array(6).fill('<div class="kpi skeleton" style="height:96px"></div>').join("");
 loadProjects().then(connectEvents).catch((e) => toast("Ошибка загрузки: " + esc(e.message), "err"));
+
+// the tab bar gets a hairline only once it sticks to the top
+new IntersectionObserver(([e]) => $("#tabbar").classList.toggle("stuck", !e.isIntersecting)).observe($("#tab-sentinel"));
