@@ -208,3 +208,89 @@ def _pr_of(label):
         return int(str(label).replace("pr_", ""))
     except ValueError:
         return None
+
+
+# ---------------------------------------------------------------- карта мёрджей
+
+def pair_key(a, b):
+    return f"{a}|{b}" if a <= b else f"{b}|{a}"
+
+
+def pair_state(compat, a, b):
+    """Что известно про пару: наложение по файлам, результат мержа в обе стороны, дубль."""
+    return compat.get(pair_key(a, b)) or {}
+
+
+def compatible(compat, a, b, cache=None):
+    """Пара совместима, если мержа конфликтного не было и файлы не пересекаются."""
+    st = pair_state(compat, a, b)
+    if st.get("merge") == "conflict" or st.get("merge_rev") == "conflict":
+        return False
+    if st.get("overlap", 0) == 0 and st.get("merge") in (None, "clean"):
+        return True
+    return st.get("merge") != "conflict" and st.get("merge_rev") != "conflict"
+
+
+def plan_metrics(plan, cands, compat, hot_total=1.0):
+    """Цифры расклада: сколько берём, сколько внутри конфликтов, сколько файлов патим, как горячо."""
+    ids = [c["id"] for c in plan]
+    inside_conflicts = []
+    for i, a in enumerate(ids):
+        for b in ids[i + 1:]:
+            if not compatible(compat, a, b):
+                inside_conflicts.append((a, b))
+    files = set()
+    for c in plan:
+        files |= set(c.get("files") or [])
+    hot = sum(c.get("hot") or 0 for c in plan) / max(1e-9, hot_total)
+    return {
+        "count": len(plan), "score_sum": round(sum(c.get("score") or 0 for c in plan), 1),
+        "conflicts": len(inside_conflicts), "conflict_pairs": inside_conflicts[:20],
+        "files": len(files), "hot_share": round(100 * hot, 2),
+        "duplicates": sum(1 for c in plan if c.get("dup_hint")),
+        "kinds": {"pr": sum(1 for c in plan if c["kind"] == "pr"), "fork": sum(1 for c in plan if c["kind"] == "fork")},
+    }
+
+
+def build_plans(cands, compat, hot_total=1.0, top_n=20):
+    """Несколько раскладов из одной матрицы: каждый отвечает на свой вопрос.
+
+    * `safe`      — максимум по баллу без единого конфликта внутри (что можно взять сегодня);
+    * `all_in`    — берём всё, конфликты разбираем руками (сколько их и где — в метриках);
+    * `top_score` — первые N по баллу, цена поддержки не важна;
+    * `low_churn` — балл против «горячести» файлов: приоритет тому, что реже ломается апстримом;
+    * `by_area`   — по одному лучшему на подсистему, чтобы закрыть шире, а не глубже.
+    """
+    by_score = sorted(cands, key=lambda c: -(c.get("score") or 0))
+
+    def greedy(order):
+        chosen = []
+        for c in order:
+            if all(compatible(compat, c["id"], x["id"]) for x in chosen):
+                chosen.append(c)
+        return chosen
+
+    plans = {"safe": greedy(by_score), "all_in": list(by_score), "top_score": by_score[:top_n]}
+    low = sorted(cands, key=lambda c: (-(c.get("score") or 0) / (1 + 12 * (c.get("hot_share_i") or 0))))
+    plans["low_churn"] = greedy(low)
+    seen_area, by_area = set(), []
+    for c in by_score:
+        if c.get("area") and c["area"] not in seen_area:
+            seen_area.add(c["area"])
+            by_area.append(c)
+    rest = [c for c in by_score if c not in by_area]
+    plans["by_area"] = by_area + [c for c in greedy(rest) if c not in by_area]
+    return {name: plan_metrics(plan, cands, compat, hot_total) | {"plan": [c["id"] for c in plan], "members": plan}
+            for name, plan in plans.items()}
+
+
+def map_pair_questions(a, b):
+    """Вопросы про пару кандидатов: не одно ли и то же они чинят и какой лучше."""
+    return {
+        "same_problem": {"type": "boolean", "instructions":
+                         "The two changes fix or add the same thing: applying one makes the other unnecessary or contradictory."},
+        "better": {"type": "choice", "instructions":
+                   "If we could take only one of the two, which is better for the project: smaller and safer wins over larger and broader.",
+                   "criteria": {"a": f"First: {a['title'][:120]}", "b": f"Second: {b['title'][:120]}",
+                                "equal": "They are equally good, or they do different things"}},
+    }

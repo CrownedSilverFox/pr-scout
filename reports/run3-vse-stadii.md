@@ -1,6 +1,6 @@
 # PR Scout: paperclipai/paperclip
 
-Прогон: 2989 PR с баллами, финалистов 120, Jev потратил $0.7286 (14569284 входных токенов).
+Прогон: 2989 PR с баллами, финалистов 120, Jev потратил $0.7398 (14794638 входных токенов).
 
 - `describe`: 0 шт · 1 с · $0 · ошибок 0
 - `stage1`: 2989 шт · 365 с · $0.351 · ошибок 0
@@ -13,12 +13,14 @@
 - `forks-list`: 15627 шт · 144 с · $0 · ошибок 0
 - `forks`: 1844 шт · 295 с · $0.1435 · ошибок 0
 - `stack`: 42 шт · 36 с · $0 · ошибок 3
+- `map`: 62 шт · 455 с · $0.0056 · ошибок 378
+- `map`: 62 шт · 308 с · $0.0056 · ошибок 0
 
-Последний цикл: 14569284 входных токенов, $0.7286. Все прогоны в истории: 23713640 токенов, $1.5211.
+Последний цикл: 14794638 входных токенов, $0.7398. Все прогоны в истории: 23713640 токенов, $1.5323.
 
 | вариант | цена |
 |---|---:|
-| Jev (факт, последний цикл) | $0.7286 |
+| Jev (факт, последний цикл) | $0.7398 |
 | Claude Opus 5.5 (оценка на тех же токенах) | $252.01 |
 | Claude Sonnet 5 (оценка на тех же токенах) | $126.00 |
 | Claude Haiku 4.5 (оценка на тех же токенах) | $63.00 |
@@ -472,12 +474,6 @@
   - + серьёзный баг в обычной работе (вред 0.93, частота 0.6)
   - + прямо про ваше использование (2.92/3)
 
-**#7757** [fix: handle EPIPE on adapter stdin.write after pipe close](https://github.com/paperclipai/paperclip/pull/7757)
-`фикс` · Прочее · автор @exocode · балл **79.4** · 36+1 строк · — дн. · CI: green
-  - ✗ конфликт с основной веткой и взятыми PR: server-utils.test.ts
-  - + серьёзный баг в обычной работе (вред 0.79, частота 0.64)
-  - + прямо про ваше использование (2.7/3)
-
 **#6162** [Fix skill mention UUID/slug dispatch resolution](https://github.com/paperclipai/paperclip/pull/6162)
 `фикс` · Запуски и heartbeat · автор @ryanclark2 · балл **79.4** · 143+4 строк · — дн. · CI: green
   - ✗ конфликт с основной веткой и взятыми PR: heartbeat-project-env.test.ts, issues-service.test.ts, issues.ts
@@ -749,11 +745,16 @@
   - ✗ продвигает сторонний сервис (0.91)
   - + сильная фича (ценность 3.35/4, новизна 0.76)
 
+**#11506** [fix: wake requesting agent when approval card is rejected](https://github.com/paperclipai/paperclip/pull/11506)
+`фикс` · Задачи и согласования · автор @rotem-zecharia · балл **76.2** · 403+22 строк · — дн. · CI: red
+  - ✗ конфликт с основной веткой и взятыми PR: _journal.json, approval.ts, approval-routes-idempotency.test.ts
+  - ✗ код не совпадает с описанием (0.11)
+  - ! падают тесты CI: Verify serialized server suites (1/5)
+  - + серьёзный баг в обычной работе (вред 0.88, частота 0.76)
+  - + прямо про ваше использование (2.54/3)
+
 
 ## Не дошли до этапа 2 — только балл этапа 1, вердикта нет (2869)
-
-**#11506** [fix: wake requesting agent when approval card is rejected](https://github.com/paperclipai/paperclip/pull/11506)
-`фикс` · Задачи и согласования · автор @rotem-zecharia · балл **76.2** · 403+22 строк · — дн. · CI: —
 
 **#9293** [feat(issues): add trigger date to defer agent work until a scheduled time](https://github.com/paperclipai/paperclip/pull/9293)
 `фича` · Задачи и согласования · автор @lacymorrow · балл **76.2** · 291+3 строк · — дн. · CI: —
@@ -841,6 +842,9 @@
 
 **#3284** [fix(issues): use resolved UUID instead of identifier in wakeup payloads](https://github.com/paperclipai/paperclip/pull/3284)
 `фикс` · Задачи и согласования · автор @kbecking · балл **75.1** · 9+9 строк · — дн. · CI: —
+
+**#13566** [fix(server): restore top-level redacted adapter secrets on agent update](https://github.com/paperclipai/paperclip/pull/13566)
+`фикс` · AI-подключения и доступ · автор @alfirus · балл **75.0** · 33+10 строк · — дн. · CI: —
 
 
 # Issues: 2467 открытых, 2070 без единого PR
@@ -1336,3 +1340,248 @@
 - issue #4996 (issue #4996): кандидаты #5060, #10519 → **берём [#5060](https://github.com/paperclipai/paperclip/pull/5060)** (уверенность 0.24, proper_fix 0.41)
 
 - issue #1317 (Proposition: Add all codex models (2min work)): кандидаты #5087, #9382 → **берём [#5087](https://github.com/paperclipai/paperclip/pull/5087)** (уверенность 0.21, proper_fix 0.57)
+
+
+# Карта мёрджей: попарный анализ и расклады
+
+Кандидатов 0 (выжившие PR + лучшие форки), пар 1891, живьём мержили пересекающиеся по файлам: 378, смысловое сравнение через Jev: 150.
+
+| расклад | берём | сумма баллов | конфликтов внутри | файлов | горячих правок |
+|---|---:|---:|---:|---:|---:|
+| **Безопасный — максимум по баллу без конфликтов внутри** | 41 | 3271.0 | 0 | 226 | 23.59% |
+| **Всё в одно — конфликты разбираем руками** | 62 | 4861.6 | 322 | 407 | 54.48% |
+| **Топ по баллу — цена поддержки не важна** | 20 | 1644.4 | 0 | 120 | 15.75% |
+| **Минимум поверхности — что реже ломается апстримом** | 41 | 3262.4 | 0 | 207 | 19.7% |
+| **По одному на подсистему — шире, а не глубже** | 43 | 3427.3 | 2 | 233 | 24.68% |
+
+## Расклад: Безопасный — максимум по баллу без конфликтов внутри
+
+Берём 41 (38 PR + 3 форков), сумма баллов 3271.0, конфликтов внутри 0, файлов 226, доля горячих правок 23.59%.
+
+- `pr-12842` [fix(agents): merge runtimeConfig on PATCH instead of replacing the column](https://github.com/paperclipai/paperclip/pull12842) — балл 85.3, 5 файлов, 199 строк
+- `pr-11479` [fix(server): keep comment after-cursor exclusive at microsecond precision](https://github.com/paperclipai/paperclip/pull11479) — балл 85.2, 3 файлов, 147 строк
+- `pr-13622` [fix(claude-local): use the `auth login` subcommand for agent login](https://github.com/paperclipai/paperclip/pull13622) — балл 84.5, 2 файлов, 53 строк
+- `pr-13936` [fix(server): redact credential-bearing git remotes in run logs](https://github.com/paperclipai/paperclip/pull13936) — балл 84.0, 18 файлов, 606 строк
+- `pr-6808` [feat(heartbeat): ADR-0044 session lifecycle T1/T2/T3/T4 for claude_local](https://github.com/paperclipai/paperclip/pull6808) — балл 84.0, 7 файлов, 680 строк
+- `pr-13978` [fix(claude-local): let npm installs run Opus 5.5 with Claude ACP bridge 0.81.2](https://github.com/paperclipai/paperclip/pull13978) — балл 83.5, 19 файлов, 155 строк
+- `pr-11107` [fix(recovery): stop agent output from bypassing the run-liveness safety gate](https://github.com/paperclipai/paperclip/pull11107) — балл 83.5, 3 файлов, 96 строк
+- `pr-11311` [fix(adapter-utils): redact env dumps and DSN passwords in transcripts](https://github.com/paperclipai/paperclip/pull11311) — балл 83.4, 3 файлов, 209 строк
+- `pr-11052` [fix(claude-local): classify failures from the run's error surface, not its whole stdout](https://github.com/paperclipai/paperclip/pull11052) — балл 83.0, 2 файлов, 136 строк
+- `pr-13726` [fix(ai-connections): rotate Claude subscription credentials from a file](https://github.com/paperclipai/paperclip/pull13726) — балл 81.7, 5 файлов, 153 строк
+- `pr-14039` [fix(claude-local): map thinking effort to the selected model](https://github.com/paperclipai/paperclip/pull14039) — балл 81.2, 12 файлов, 323 строк
+- `pr-10735` [fix(issues): re-arm issue monitors on dispatch so a failed run cannot strand the issue](https://github.com/paperclipai/paperclip/pull10735) — балл 81.1, 10 файлов, 460 строк
+- `pr-13802` [fix(server): default and cap the heartbeat-runs list limit](https://github.com/paperclipai/paperclip/pull13802) — балл 81.0, 5 файлов, 89 строк
+- `pr-13833` [fix(server): bind run context to the checked-out issue so taskless runs can write](https://github.com/paperclipai/paperclip/pull13833) — балл 80.9, 7 файлов, 848 строк
+- `pr-9219` [fix(claude-local, heartbeat): recover from silent session_lost caused by cwd switches](https://github.com/paperclipai/paperclip/pull9219) — балл 80.6, 5 файлов, 258 строк
+- `pr-12870` [fix(adapter-utils): strip DATABASE_URL and BETTER_AUTH_SECRET from inherited agent env](https://github.com/paperclipai/paperclip/pull12870) — балл 80.6, 2 файлов, 17 строк
+- `pr-13769` [fix(heartbeat): re-admit a wake parked by a gate that has gone away](https://github.com/paperclipai/paperclip/pull13769) — балл 80.3, 2 файлов, 341 строк
+- `pr-13148` [fix(claude-local): classify ACP session-limit turn failures as provider quota with the parsed reset time](https://github.com/paperclipai/paperclip/pull13148) — балл 80.3, 2 файлов, 139 строк
+- `pr-13653` [Deterministic shipped-gate: verify claimed commits before an issue can reach done](https://github.com/paperclipai/paperclip/pull13653) — балл 80.2, 23 файлов, 558 строк
+- `pr-7432` [fix(issues): resolve identifier to UUID for parentId/descendantOf filters](https://github.com/paperclipai/paperclip/pull7432) — балл 80.1, 2 файлов, 398 строк
+- `pr-10862` [Make agent role editable after creation](https://github.com/paperclipai/paperclip/pull10862) — балл 79.9, 2 файлов, 127 строк
+- `pr-11466` [fix(server): atomically set checkout run contextSnapshot with issue lock](https://github.com/paperclipai/paperclip/pull11466) — балл 79.9, 3 файлов, 281 строк
+- `pr-13478` [feat(claude-local): retry transient upstream errors with exponential backoff](https://github.com/paperclipai/paperclip/pull13478) — балл 79.6, 2 файлов, 300 строк
+- `fork-SEONGMINY/paperclip` [SEONGMINY/paperclip](https://github.com/paperclipai/paperclip/) — балл 79.0, 11 файлов, 326 строк
+- `pr-10871` [feat(dashboard): report token usage where subscription billing zeroes spend](https://github.com/paperclipai/paperclip/pull10871) — балл 78.7, 12 файлов, 651 строк
+- `pr-11462` [fix(security): redact sensitive fields in config-read API responses (extracted from #10284)](https://github.com/paperclipai/paperclip/pull11462) — балл 78.1, 2 файлов, 95 строк
+- `pr-14192` [feat(chat): add a Delete chat action to the agent conversation header](https://github.com/paperclipai/paperclip/pull14192) — балл 77.9, 5 файлов, 293 строк
+- `pr-11980` [feat(approvals): add POST /approvals/:id/cancel for requester withdrawal [INUA-5995]](https://github.com/paperclipai/paperclip/pull11980) — балл 77.8, 6 файлов, 386 строк
+- `pr-13134` [feat(codex-models): read the Codex CLI models cache for ChatGPT-auth installs](https://github.com/paperclipai/paperclip/pull13134) — балл 77.5, 2 файлов, 206 строк
+- `pr-8063` [feat(claude-local): resolve @ file references in agent instructions](https://github.com/paperclipai/paperclip/pull8063) — балл 77.4, 1 файлов, 150 строк
+- `pr-4764` [fix: add goal owner editing in goals UI](https://github.com/paperclipai/paperclip/pull4764) — балл 77.2, 4 файлов, 496 строк
+- `pr-9810` [feat(mcp): add paperclipListIssueInteractions so agents can read decision-card replies](https://github.com/paperclipai/paperclip/pull9810) — балл 77.2, 1 файлов, 9 строк
+- `pr-8800` [Add task thread sort order option](https://github.com/paperclipai/paperclip/pull8800) — балл 77.1, 10 файлов, 512 строк
+- `pr-13069` [feat(plugins): add per-tool timeouts with structured timeout results](https://github.com/paperclipai/paperclip/pull13069) — балл 76.9, 11 файлов, 424 строк
+- `pr-3856` [fix(agents): preserve sibling keys of runtimeConfig on partial PATCH](https://github.com/paperclipai/paperclip/pull3856) — балл 76.6, 1 файлов, 12 строк
+- `pr-13782` [fix: keep the requesting run alive when an agent hands off its own issue](https://github.com/paperclipai/paperclip/pull13782) — балл 76.4, 2 файлов, 94 строк
+- `pr-4807` [fix(recovery): dispatch in_progress sub-issues with no execution history as fresh assignment (PAP-4766)](https://github.com/paperclipai/paperclip/pull4807) — балл 76.3, 2 файлов, 111 строк
+- `pr-13060` [feat(runs): add session-log ZIP export for heartbeat runs](https://github.com/paperclipai/paperclip/pull13060) — балл 76.3, 9 файлов, 606 строк
+- `pr-11336` [fix(server): share one pluginLifecycleManager between routes and dispatcher](https://github.com/paperclipai/paperclip/pull11336) — балл 76.2, 4 файлов, 173 строк
+- `fork-tim80411/paperclip` [tim80411/paperclip](https://github.com/paperclipai/paperclip/) — балл 76.0, 16 файлов, 892 строк
+
+## Расклад: Всё в одно — конфликты разбираем руками
+
+Берём 62 (42 PR + 20 форков), сумма баллов 4861.6, конфликтов внутри 322, файлов 407, доля горячих правок 54.48%.
+
+- `pr-12842` [fix(agents): merge runtimeConfig on PATCH instead of replacing the column](https://github.com/paperclipai/paperclip/pull12842) — балл 85.3, 5 файлов, 199 строк
+- `pr-11479` [fix(server): keep comment after-cursor exclusive at microsecond precision](https://github.com/paperclipai/paperclip/pull11479) — балл 85.2, 3 файлов, 147 строк
+- `pr-13622` [fix(claude-local): use the `auth login` subcommand for agent login](https://github.com/paperclipai/paperclip/pull13622) — балл 84.5, 2 файлов, 53 строк
+- `pr-13936` [fix(server): redact credential-bearing git remotes in run logs](https://github.com/paperclipai/paperclip/pull13936) — балл 84.0, 18 файлов, 606 строк
+- `pr-6808` [feat(heartbeat): ADR-0044 session lifecycle T1/T2/T3/T4 for claude_local](https://github.com/paperclipai/paperclip/pull6808) — балл 84.0, 7 файлов, 680 строк
+- `pr-13978` [fix(claude-local): let npm installs run Opus 5.5 with Claude ACP bridge 0.81.2](https://github.com/paperclipai/paperclip/pull13978) — балл 83.5, 19 файлов, 155 строк
+- `pr-11107` [fix(recovery): stop agent output from bypassing the run-liveness safety gate](https://github.com/paperclipai/paperclip/pull11107) — балл 83.5, 3 файлов, 96 строк
+- `pr-11311` [fix(adapter-utils): redact env dumps and DSN passwords in transcripts](https://github.com/paperclipai/paperclip/pull11311) — балл 83.4, 3 файлов, 209 строк
+- `pr-11052` [fix(claude-local): classify failures from the run's error surface, not its whole stdout](https://github.com/paperclipai/paperclip/pull11052) — балл 83.0, 2 файлов, 136 строк
+- `pr-13726` [fix(ai-connections): rotate Claude subscription credentials from a file](https://github.com/paperclipai/paperclip/pull13726) — балл 81.7, 5 файлов, 153 строк
+- `pr-14039` [fix(claude-local): map thinking effort to the selected model](https://github.com/paperclipai/paperclip/pull14039) — балл 81.2, 12 файлов, 323 строк
+- `pr-10735` [fix(issues): re-arm issue monitors on dispatch so a failed run cannot strand the issue](https://github.com/paperclipai/paperclip/pull10735) — балл 81.1, 10 файлов, 460 строк
+- `pr-13802` [fix(server): default and cap the heartbeat-runs list limit](https://github.com/paperclipai/paperclip/pull13802) — балл 81.0, 5 файлов, 89 строк
+- `pr-13833` [fix(server): bind run context to the checked-out issue so taskless runs can write](https://github.com/paperclipai/paperclip/pull13833) — балл 80.9, 7 файлов, 848 строк
+- `pr-9219` [fix(claude-local, heartbeat): recover from silent session_lost caused by cwd switches](https://github.com/paperclipai/paperclip/pull9219) — балл 80.6, 5 файлов, 258 строк
+- `pr-12870` [fix(adapter-utils): strip DATABASE_URL and BETTER_AUTH_SECRET from inherited agent env](https://github.com/paperclipai/paperclip/pull12870) — балл 80.6, 2 файлов, 17 строк
+- `pr-13769` [fix(heartbeat): re-admit a wake parked by a gate that has gone away](https://github.com/paperclipai/paperclip/pull13769) — балл 80.3, 2 файлов, 341 строк
+- `pr-13148` [fix(claude-local): classify ACP session-limit turn failures as provider quota with the parsed reset time](https://github.com/paperclipai/paperclip/pull13148) — балл 80.3, 2 файлов, 139 строк
+- `pr-13653` [Deterministic shipped-gate: verify claimed commits before an issue can reach done](https://github.com/paperclipai/paperclip/pull13653) — балл 80.2, 23 файлов, 558 строк
+- `pr-7432` [fix(issues): resolve identifier to UUID for parentId/descendantOf filters](https://github.com/paperclipai/paperclip/pull7432) — балл 80.1, 2 файлов, 398 строк
+- `pr-10862` [Make agent role editable after creation](https://github.com/paperclipai/paperclip/pull10862) — балл 79.9, 2 файлов, 127 строк
+- `pr-11466` [fix(server): atomically set checkout run contextSnapshot with issue lock](https://github.com/paperclipai/paperclip/pull11466) — балл 79.9, 3 файлов, 281 строк
+- `pr-13478` [feat(claude-local): retry transient upstream errors with exponential backoff](https://github.com/paperclipai/paperclip/pull13478) — балл 79.6, 2 файлов, 300 строк
+- `fork-axelweichert/paperclip` [axelweichert/paperclip](https://github.com/paperclipai/paperclip/) — балл 79.4, 15 файлов, 756 строк
+- `fork-SEONGMINY/paperclip` [SEONGMINY/paperclip](https://github.com/paperclipai/paperclip/) — балл 79.0, 11 файлов, 326 строк
+- `pr-10871` [feat(dashboard): report token usage where subscription billing zeroes spend](https://github.com/paperclipai/paperclip/pull10871) — балл 78.7, 12 файлов, 651 строк
+- `pr-14248` [fix(server): keep a policy's other fields when a monitor is stripped](https://github.com/paperclipai/paperclip/pull14248) — балл 78.4, 2 файлов, 144 строк
+- `pr-13447` [fix: preserve OAuth refresh access and contain managed MCP config](https://github.com/paperclipai/paperclip/pull13447) — балл 78.2, 9 файлов, 303 строк
+- `pr-12786` [fix(adapter-utils): redact header-style secrets in command text](https://github.com/paperclipai/paperclip/pull12786) — балл 78.1, 2 файлов, 1925 строк
+- `pr-11462` [fix(security): redact sensitive fields in config-read API responses (extracted from #10284)](https://github.com/paperclipai/paperclip/pull11462) — балл 78.1, 2 файлов, 95 строк
+- `pr-13892` [fix(issues): let the assignee supersede critically-silent run bindings](https://github.com/paperclipai/paperclip/pull13892) — балл 78.0, 9 файлов, 788 строк
+- `pr-14192` [feat(chat): add a Delete chat action to the agent conversation header](https://github.com/paperclipai/paperclip/pull14192) — балл 77.9, 5 файлов, 293 строк
+- `pr-11980` [feat(approvals): add POST /approvals/:id/cancel for requester withdrawal [INUA-5995]](https://github.com/paperclipai/paperclip/pull11980) — балл 77.8, 6 файлов, 386 строк
+- `pr-13134` [feat(codex-models): read the Codex CLI models cache for ChatGPT-auth installs](https://github.com/paperclipai/paperclip/pull13134) — балл 77.5, 2 файлов, 206 строк
+- `pr-8063` [feat(claude-local): resolve @ file references in agent instructions](https://github.com/paperclipai/paperclip/pull8063) — балл 77.4, 1 файлов, 150 строк
+- `pr-4764` [fix: add goal owner editing in goals UI](https://github.com/paperclipai/paperclip/pull4764) — балл 77.2, 4 файлов, 496 строк
+- `pr-9810` [feat(mcp): add paperclipListIssueInteractions so agents can read decision-card replies](https://github.com/paperclipai/paperclip/pull9810) — балл 77.2, 1 файлов, 9 строк
+- `pr-8800` [Add task thread sort order option](https://github.com/paperclipai/paperclip/pull8800) — балл 77.1, 10 файлов, 512 строк
+- `pr-13069` [feat(plugins): add per-tool timeouts with structured timeout results](https://github.com/paperclipai/paperclip/pull13069) — балл 76.9, 11 файлов, 424 строк
+- `fork-azibetti/paperclip` [azibetti/paperclip](https://github.com/paperclipai/paperclip/) — балл 76.8, 32 файлов, 1493 строк
+
+  Конфликтные пары внутри расклада: pr-12842×fork-axelweichert/paperclip, pr-12842×fork-keegoid/paperclip, pr-12842×fork-Southeastern-Renovation/paperclip, pr-12842×fork-RajdevShivam/paperclip, pr-12842×fork-YukiCrisp/paperclip, pr-12842×fork-Aitor1111/paperclip, pr-11479×fork-RiyDomingo/paperclip-master, pr-11479×fork-RajdevShivam/paperclip, pr-13622×fork-siddharthramputty/paperclip, pr-13622×fork-qwlong/paperclip
+
+## Расклад: Топ по баллу — цена поддержки не важна
+
+Берём 20 (20 PR + 0 форков), сумма баллов 1644.4, конфликтов внутри 0, файлов 120, доля горячих правок 15.75%.
+
+- `pr-12842` [fix(agents): merge runtimeConfig on PATCH instead of replacing the column](https://github.com/paperclipai/paperclip/pull12842) — балл 85.3, 5 файлов, 199 строк
+- `pr-11479` [fix(server): keep comment after-cursor exclusive at microsecond precision](https://github.com/paperclipai/paperclip/pull11479) — балл 85.2, 3 файлов, 147 строк
+- `pr-13622` [fix(claude-local): use the `auth login` subcommand for agent login](https://github.com/paperclipai/paperclip/pull13622) — балл 84.5, 2 файлов, 53 строк
+- `pr-13936` [fix(server): redact credential-bearing git remotes in run logs](https://github.com/paperclipai/paperclip/pull13936) — балл 84.0, 18 файлов, 606 строк
+- `pr-6808` [feat(heartbeat): ADR-0044 session lifecycle T1/T2/T3/T4 for claude_local](https://github.com/paperclipai/paperclip/pull6808) — балл 84.0, 7 файлов, 680 строк
+- `pr-13978` [fix(claude-local): let npm installs run Opus 5.5 with Claude ACP bridge 0.81.2](https://github.com/paperclipai/paperclip/pull13978) — балл 83.5, 19 файлов, 155 строк
+- `pr-11107` [fix(recovery): stop agent output from bypassing the run-liveness safety gate](https://github.com/paperclipai/paperclip/pull11107) — балл 83.5, 3 файлов, 96 строк
+- `pr-11311` [fix(adapter-utils): redact env dumps and DSN passwords in transcripts](https://github.com/paperclipai/paperclip/pull11311) — балл 83.4, 3 файлов, 209 строк
+- `pr-11052` [fix(claude-local): classify failures from the run's error surface, not its whole stdout](https://github.com/paperclipai/paperclip/pull11052) — балл 83.0, 2 файлов, 136 строк
+- `pr-13726` [fix(ai-connections): rotate Claude subscription credentials from a file](https://github.com/paperclipai/paperclip/pull13726) — балл 81.7, 5 файлов, 153 строк
+- `pr-14039` [fix(claude-local): map thinking effort to the selected model](https://github.com/paperclipai/paperclip/pull14039) — балл 81.2, 12 файлов, 323 строк
+- `pr-10735` [fix(issues): re-arm issue monitors on dispatch so a failed run cannot strand the issue](https://github.com/paperclipai/paperclip/pull10735) — балл 81.1, 10 файлов, 460 строк
+- `pr-13802` [fix(server): default and cap the heartbeat-runs list limit](https://github.com/paperclipai/paperclip/pull13802) — балл 81.0, 5 файлов, 89 строк
+- `pr-13833` [fix(server): bind run context to the checked-out issue so taskless runs can write](https://github.com/paperclipai/paperclip/pull13833) — балл 80.9, 7 файлов, 848 строк
+- `pr-9219` [fix(claude-local, heartbeat): recover from silent session_lost caused by cwd switches](https://github.com/paperclipai/paperclip/pull9219) — балл 80.6, 5 файлов, 258 строк
+- `pr-12870` [fix(adapter-utils): strip DATABASE_URL and BETTER_AUTH_SECRET from inherited agent env](https://github.com/paperclipai/paperclip/pull12870) — балл 80.6, 2 файлов, 17 строк
+- `pr-13769` [fix(heartbeat): re-admit a wake parked by a gate that has gone away](https://github.com/paperclipai/paperclip/pull13769) — балл 80.3, 2 файлов, 341 строк
+- `pr-13148` [fix(claude-local): classify ACP session-limit turn failures as provider quota with the parsed reset time](https://github.com/paperclipai/paperclip/pull13148) — балл 80.3, 2 файлов, 139 строк
+- `pr-13653` [Deterministic shipped-gate: verify claimed commits before an issue can reach done](https://github.com/paperclipai/paperclip/pull13653) — балл 80.2, 23 файлов, 558 строк
+- `pr-7432` [fix(issues): resolve identifier to UUID for parentId/descendantOf filters](https://github.com/paperclipai/paperclip/pull7432) — балл 80.1, 2 файлов, 398 строк
+
+## Расклад: Минимум поверхности — что реже ломается апстримом
+
+Берём 41 (38 PR + 3 форков), сумма баллов 3262.4, конфликтов внутри 0, файлов 207, доля горячих правок 19.7%.
+
+- `pr-13622` [fix(claude-local): use the `auth login` subcommand for agent login](https://github.com/paperclipai/paperclip/pull13622) — балл 84.5, 2 файлов, 53 строк
+- `pr-11311` [fix(adapter-utils): redact env dumps and DSN passwords in transcripts](https://github.com/paperclipai/paperclip/pull11311) — балл 83.4, 3 файлов, 209 строк
+- `pr-11107` [fix(recovery): stop agent output from bypassing the run-liveness safety gate](https://github.com/paperclipai/paperclip/pull11107) — балл 83.5, 3 файлов, 96 строк
+- `pr-11052` [fix(claude-local): classify failures from the run's error surface, not its whole stdout](https://github.com/paperclipai/paperclip/pull11052) — балл 83.0, 2 файлов, 136 строк
+- `pr-11479` [fix(server): keep comment after-cursor exclusive at microsecond precision](https://github.com/paperclipai/paperclip/pull11479) — балл 85.2, 3 файлов, 147 строк
+- `pr-12842` [fix(agents): merge runtimeConfig on PATCH instead of replacing the column](https://github.com/paperclipai/paperclip/pull12842) — балл 85.3, 5 файлов, 199 строк
+- `pr-13148` [fix(claude-local): classify ACP session-limit turn failures as provider quota with the parsed reset time](https://github.com/paperclipai/paperclip/pull13148) — балл 80.3, 2 файлов, 139 строк
+- `pr-13726` [fix(ai-connections): rotate Claude subscription credentials from a file](https://github.com/paperclipai/paperclip/pull13726) — балл 81.7, 5 файлов, 153 строк
+- `pr-12870` [fix(adapter-utils): strip DATABASE_URL and BETTER_AUTH_SECRET from inherited agent env](https://github.com/paperclipai/paperclip/pull12870) — балл 80.6, 2 файлов, 17 строк
+- `pr-13478` [feat(claude-local): retry transient upstream errors with exponential backoff](https://github.com/paperclipai/paperclip/pull13478) — балл 79.6, 2 файлов, 300 строк
+- `pr-14248` [fix(server): keep a policy's other fields when a monitor is stripped](https://github.com/paperclipai/paperclip/pull14248) — балл 78.4, 2 файлов, 144 строк
+- `pr-11462` [fix(security): redact sensitive fields in config-read API responses (extracted from #10284)](https://github.com/paperclipai/paperclip/pull11462) — балл 78.1, 2 файлов, 95 строк
+- `pr-12786` [fix(adapter-utils): redact header-style secrets in command text](https://github.com/paperclipai/paperclip/pull12786) — балл 78.1, 2 файлов, 1925 строк
+- `pr-10862` [Make agent role editable after creation](https://github.com/paperclipai/paperclip/pull10862) — балл 79.9, 2 файлов, 127 строк
+- `pr-13134` [feat(codex-models): read the Codex CLI models cache for ChatGPT-auth installs](https://github.com/paperclipai/paperclip/pull13134) — балл 77.5, 2 файлов, 206 строк
+- `pr-4764` [fix: add goal owner editing in goals UI](https://github.com/paperclipai/paperclip/pull4764) — балл 77.2, 4 файлов, 496 строк
+- `pr-9810` [feat(mcp): add paperclipListIssueInteractions so agents can read decision-card replies](https://github.com/paperclipai/paperclip/pull9810) — балл 77.2, 1 файлов, 9 строк
+- `pr-11466` [fix(server): atomically set checkout run contextSnapshot with issue lock](https://github.com/paperclipai/paperclip/pull11466) — балл 79.9, 3 файлов, 281 строк
+- `pr-8063` [feat(claude-local): resolve @ file references in agent instructions](https://github.com/paperclipai/paperclip/pull8063) — балл 77.4, 1 файлов, 150 строк
+- `pr-7432` [fix(issues): resolve identifier to UUID for parentId/descendantOf filters](https://github.com/paperclipai/paperclip/pull7432) — балл 80.1, 2 файлов, 398 строк
+- `pr-13802` [fix(server): default and cap the heartbeat-runs list limit](https://github.com/paperclipai/paperclip/pull13802) — балл 81.0, 5 файлов, 89 строк
+- `fork-SEONGMINY/paperclip` [SEONGMINY/paperclip](https://github.com/paperclipai/paperclip/) — балл 79.0, 11 файлов, 326 строк
+- `pr-10871` [feat(dashboard): report token usage where subscription billing zeroes spend](https://github.com/paperclipai/paperclip/pull10871) — балл 78.7, 12 файлов, 651 строк
+- `fork-zackjyo39-alt/paperclip` [zackjyo39-alt/paperclip](https://github.com/paperclipai/paperclip/) — балл 74.6, 13 файлов, 806 строк
+- `pr-14039` [fix(claude-local): map thinking effort to the selected model](https://github.com/paperclipai/paperclip/pull14039) — балл 81.2, 12 файлов, 323 строк
+- `pr-11336` [fix(server): share one pluginLifecycleManager between routes and dispatcher](https://github.com/paperclipai/paperclip/pull11336) — балл 76.2, 4 файлов, 173 строк
+- `pr-3856` [fix(agents): preserve sibling keys of runtimeConfig on partial PATCH](https://github.com/paperclipai/paperclip/pull3856) — балл 76.6, 1 файлов, 12 строк
+- `pr-13069` [feat(plugins): add per-tool timeouts with structured timeout results](https://github.com/paperclipai/paperclip/pull13069) — балл 76.9, 11 файлов, 424 строк
+- `pr-6808` [feat(heartbeat): ADR-0044 session lifecycle T1/T2/T3/T4 for claude_local](https://github.com/paperclipai/paperclip/pull6808) — балл 84.0, 7 файлов, 680 строк
+- `fork-tim80411/paperclip` [tim80411/paperclip](https://github.com/paperclipai/paperclip/) — балл 76.0, 16 файлов, 892 строк
+- `pr-13782` [fix: keep the requesting run alive when an agent hands off its own issue](https://github.com/paperclipai/paperclip/pull13782) — балл 76.4, 2 файлов, 94 строк
+- `pr-13653` [Deterministic shipped-gate: verify claimed commits before an issue can reach done](https://github.com/paperclipai/paperclip/pull13653) — балл 80.2, 23 файлов, 558 строк
+- `pr-14192` [feat(chat): add a Delete chat action to the agent conversation header](https://github.com/paperclipai/paperclip/pull14192) — балл 77.9, 5 файлов, 293 строк
+- `pr-4807` [fix(recovery): dispatch in_progress sub-issues with no execution history as fresh assignment (PAP-4766)](https://github.com/paperclipai/paperclip/pull4807) — балл 76.3, 2 файлов, 111 строк
+- `pr-13769` [fix(heartbeat): re-admit a wake parked by a gate that has gone away](https://github.com/paperclipai/paperclip/pull13769) — балл 80.3, 2 файлов, 341 строк
+- `pr-11980` [feat(approvals): add POST /approvals/:id/cancel for requester withdrawal [INUA-5995]](https://github.com/paperclipai/paperclip/pull11980) — балл 77.8, 6 файлов, 386 строк
+- `pr-9219` [fix(claude-local, heartbeat): recover from silent session_lost caused by cwd switches](https://github.com/paperclipai/paperclip/pull9219) — балл 80.6, 5 файлов, 258 строк
+- `pr-13060` [feat(runs): add session-log ZIP export for heartbeat runs](https://github.com/paperclipai/paperclip/pull13060) — балл 76.3, 9 файлов, 606 строк
+- `pr-13833` [fix(server): bind run context to the checked-out issue so taskless runs can write](https://github.com/paperclipai/paperclip/pull13833) — балл 80.9, 7 файлов, 848 строк
+- `pr-8800` [Add task thread sort order option](https://github.com/paperclipai/paperclip/pull8800) — балл 77.1, 10 файлов, 512 строк
+
+## Расклад: По одному на подсистему — шире, а не глубже
+
+Берём 43 (40 PR + 3 форков), сумма баллов 3427.3, конфликтов внутри 2, файлов 233, доля горячих правок 24.68%.
+
+- `pr-12842` [fix(agents): merge runtimeConfig on PATCH instead of replacing the column](https://github.com/paperclipai/paperclip/pull12842) — балл 85.3, 5 файлов, 199 строк
+- `pr-11479` [fix(server): keep comment after-cursor exclusive at microsecond precision](https://github.com/paperclipai/paperclip/pull11479) — балл 85.2, 3 файлов, 147 строк
+- `pr-13622` [fix(claude-local): use the `auth login` subcommand for agent login](https://github.com/paperclipai/paperclip/pull13622) — балл 84.5, 2 файлов, 53 строк
+- `pr-13936` [fix(server): redact credential-bearing git remotes in run logs](https://github.com/paperclipai/paperclip/pull13936) — балл 84.0, 18 файлов, 606 строк
+- `pr-11311` [fix(adapter-utils): redact env dumps and DSN passwords in transcripts](https://github.com/paperclipai/paperclip/pull11311) — балл 83.4, 3 файлов, 209 строк
+- `pr-13726` [fix(ai-connections): rotate Claude subscription credentials from a file](https://github.com/paperclipai/paperclip/pull13726) — балл 81.7, 5 файлов, 153 строк
+- `pr-12870` [fix(adapter-utils): strip DATABASE_URL and BETTER_AUTH_SECRET from inherited agent env](https://github.com/paperclipai/paperclip/pull12870) — балл 80.6, 2 файлов, 17 строк
+- `pr-10862` [Make agent role editable after creation](https://github.com/paperclipai/paperclip/pull10862) — балл 79.9, 2 файлов, 127 строк
+- `pr-13447` [fix: preserve OAuth refresh access and contain managed MCP config](https://github.com/paperclipai/paperclip/pull13447) — балл 78.2, 9 файлов, 303 строк
+- `pr-13134` [feat(codex-models): read the Codex CLI models cache for ChatGPT-auth installs](https://github.com/paperclipai/paperclip/pull13134) — балл 77.5, 2 файлов, 206 строк
+- `pr-6808` [feat(heartbeat): ADR-0044 session lifecycle T1/T2/T3/T4 for claude_local](https://github.com/paperclipai/paperclip/pull6808) — балл 84.0, 7 файлов, 680 строк
+- `pr-13978` [fix(claude-local): let npm installs run Opus 5.5 with Claude ACP bridge 0.81.2](https://github.com/paperclipai/paperclip/pull13978) — балл 83.5, 19 файлов, 155 строк
+- `pr-11107` [fix(recovery): stop agent output from bypassing the run-liveness safety gate](https://github.com/paperclipai/paperclip/pull11107) — балл 83.5, 3 файлов, 96 строк
+- `pr-11052` [fix(claude-local): classify failures from the run's error surface, not its whole stdout](https://github.com/paperclipai/paperclip/pull11052) — балл 83.0, 2 файлов, 136 строк
+- `pr-14039` [fix(claude-local): map thinking effort to the selected model](https://github.com/paperclipai/paperclip/pull14039) — балл 81.2, 12 файлов, 323 строк
+- `pr-10735` [fix(issues): re-arm issue monitors on dispatch so a failed run cannot strand the issue](https://github.com/paperclipai/paperclip/pull10735) — балл 81.1, 10 файлов, 460 строк
+- `pr-13802` [fix(server): default and cap the heartbeat-runs list limit](https://github.com/paperclipai/paperclip/pull13802) — балл 81.0, 5 файлов, 89 строк
+- `pr-13833` [fix(server): bind run context to the checked-out issue so taskless runs can write](https://github.com/paperclipai/paperclip/pull13833) — балл 80.9, 7 файлов, 848 строк
+- `pr-9219` [fix(claude-local, heartbeat): recover from silent session_lost caused by cwd switches](https://github.com/paperclipai/paperclip/pull9219) — балл 80.6, 5 файлов, 258 строк
+- `pr-13769` [fix(heartbeat): re-admit a wake parked by a gate that has gone away](https://github.com/paperclipai/paperclip/pull13769) — балл 80.3, 2 файлов, 341 строк
+- `pr-13148` [fix(claude-local): classify ACP session-limit turn failures as provider quota with the parsed reset time](https://github.com/paperclipai/paperclip/pull13148) — балл 80.3, 2 файлов, 139 строк
+- `pr-13653` [Deterministic shipped-gate: verify claimed commits before an issue can reach done](https://github.com/paperclipai/paperclip/pull13653) — балл 80.2, 23 файлов, 558 строк
+- `pr-7432` [fix(issues): resolve identifier to UUID for parentId/descendantOf filters](https://github.com/paperclipai/paperclip/pull7432) — балл 80.1, 2 файлов, 398 строк
+- `pr-11466` [fix(server): atomically set checkout run contextSnapshot with issue lock](https://github.com/paperclipai/paperclip/pull11466) — балл 79.9, 3 файлов, 281 строк
+- `pr-13478` [feat(claude-local): retry transient upstream errors with exponential backoff](https://github.com/paperclipai/paperclip/pull13478) — балл 79.6, 2 файлов, 300 строк
+- `fork-SEONGMINY/paperclip` [SEONGMINY/paperclip](https://github.com/paperclipai/paperclip/) — балл 79.0, 11 файлов, 326 строк
+- `pr-10871` [feat(dashboard): report token usage where subscription billing zeroes spend](https://github.com/paperclipai/paperclip/pull10871) — балл 78.7, 12 файлов, 651 строк
+- `pr-12786` [fix(adapter-utils): redact header-style secrets in command text](https://github.com/paperclipai/paperclip/pull12786) — балл 78.1, 2 файлов, 1925 строк
+- `pr-11462` [fix(security): redact sensitive fields in config-read API responses (extracted from #10284)](https://github.com/paperclipai/paperclip/pull11462) — балл 78.1, 2 файлов, 95 строк
+- `pr-14192` [feat(chat): add a Delete chat action to the agent conversation header](https://github.com/paperclipai/paperclip/pull14192) — балл 77.9, 5 файлов, 293 строк
+- `pr-11980` [feat(approvals): add POST /approvals/:id/cancel for requester withdrawal [INUA-5995]](https://github.com/paperclipai/paperclip/pull11980) — балл 77.8, 6 файлов, 386 строк
+- `pr-8063` [feat(claude-local): resolve @ file references in agent instructions](https://github.com/paperclipai/paperclip/pull8063) — балл 77.4, 1 файлов, 150 строк
+- `pr-4764` [fix: add goal owner editing in goals UI](https://github.com/paperclipai/paperclip/pull4764) — балл 77.2, 4 файлов, 496 строк
+- `pr-9810` [feat(mcp): add paperclipListIssueInteractions so agents can read decision-card replies](https://github.com/paperclipai/paperclip/pull9810) — балл 77.2, 1 файлов, 9 строк
+- `pr-8800` [Add task thread sort order option](https://github.com/paperclipai/paperclip/pull8800) — балл 77.1, 10 файлов, 512 строк
+- `pr-13069` [feat(plugins): add per-tool timeouts with structured timeout results](https://github.com/paperclipai/paperclip/pull13069) — балл 76.9, 11 файлов, 424 строк
+- `pr-3856` [fix(agents): preserve sibling keys of runtimeConfig on partial PATCH](https://github.com/paperclipai/paperclip/pull3856) — балл 76.6, 1 файлов, 12 строк
+- `pr-13782` [fix: keep the requesting run alive when an agent hands off its own issue](https://github.com/paperclipai/paperclip/pull13782) — балл 76.4, 2 файлов, 94 строк
+- `pr-4807` [fix(recovery): dispatch in_progress sub-issues with no execution history as fresh assignment (PAP-4766)](https://github.com/paperclipai/paperclip/pull4807) — балл 76.3, 2 файлов, 111 строк
+- `pr-13060` [feat(runs): add session-log ZIP export for heartbeat runs](https://github.com/paperclipai/paperclip/pull13060) — балл 76.3, 9 файлов, 606 строк
+
+  Конфликтные пары внутри расклада: pr-13936×pr-12786, pr-13447×fork-SEONGMINY/paperclip
+
+## Пары, которые не мержатся вместе
+
+- fork-Aitor1111/paperclip|fork-RiyDomingo/paperclip-master — пересечение 10 файлов, конфликт в: docs/adapters/claude-local.md, docs/adapters/codex-local.md, packages/adapter-utils/src/server-utils.ts, packages/adapters/claude-local/src/server/parse.ts, packages/adapters/claude-local/src/server/test.ts, packages/adapters/codex-local/src/index.ts, packages/adapters/codex-local/src/server/codex-home.test.ts, packages/adapters/codex-local/src/server/codex-home.ts
+- fork-RiyDomingo/paperclip-master|fork-SEONGMINY/paperclip — пересечение 8 файлов, конфликт в: packages/adapters/codex-local/src/server/execute.ts, packages/adapters/codex-local/src/ui/build-config.ts, server/src/__tests__/codex-local-execute.test.ts, ui/src/adapters/codex-local/config-fields.tsx, ui/src/components/agent-config-primitives.tsx
+- fork-uthapjhojho/paperclip|fork-utk2602/paperclip — пересечение 7 файлов, конфликт в: packages/adapter-utils/src/server-utils.test.ts, packages/adapters/claude-local/src/server/execute.ts, packages/adapters/codex-local/src/server/execute.ts, packages/adapters/cursor-local/src/server/execute.ts, packages/adapters/gemini-local/src/server/execute.ts, packages/adapters/opencode-local/src/server/execute.ts, packages/adapters/pi-local/src/server/execute.ts, server/src/services/heartbeat-run-summary.ts
+- fork-YukiCrisp/paperclip|fork-keegoid/paperclip — пересечение 6 файлов, конфликт в: AGENTS.md, packages/adapter-utils/src/index.ts, packages/adapter-utils/src/types.ts, packages/adapters/codex-local/src/server/execute.ts, packages/shared/src/types/heartbeat.ts, server/src/__tests__/claude-local-execute.test.ts, server/src/__tests__/codex-local-execute.test.ts, server/src/__tests__/heartbeat-active-run-output-watchdog.test.ts
+- fork-axelweichert/paperclip|pr-10871 — пересечение 5 файлов, конфликт в: packages/shared/src/constants.ts, packages/shared/src/index.ts, packages/shared/src/types/index.ts, server/src/routes/agents.ts, server/src/services/dashboard.ts, server/src/services/heartbeat.ts
+- fork-RiyDomingo/paperclip-master|fork-azibetti/paperclip — пересечение 5 файлов, конфликт в: cli/package.json, pnpm-lock.yaml, server/src/adapters/registry.ts, server/src/home-paths.ts, server/src/routes/issues.ts, server/src/routes/projects.ts, ui/src/App.tsx, ui/src/adapters/registry.ts
+- fork-Aitor1111/paperclip|fork-keegoid/paperclip — пересечение 5 файлов, конфликт в: AGENTS.md, packages/adapter-utils/src/index.ts, packages/adapter-utils/src/types.ts, packages/adapters/codex-local/src/server/execute.ts, packages/shared/src/types/heartbeat.ts, server/src/__tests__/claude-local-execute.test.ts, server/src/__tests__/codex-local-execute.test.ts, server/src/__tests__/heartbeat-active-run-output-watchdog.test.ts
+- fork-simberthon/paperclip|pr-9219 — пересечение 4 файлов, конфликт в: packages/adapters/claude-local/src/server/execute.ts, packages/adapters/claude-local/src/server/parse.test.ts, packages/adapters/claude-local/src/server/parse.ts, server/src/__tests__/heartbeat-retry-scheduling.test.ts, server/src/services/heartbeat.ts
+- fork-RiyDomingo/paperclip-master|pr-13447 — пересечение 4 файлов, конфликт в: docs/adapters/claude-local.md, docs/adapters/codex-local.md, packages/adapter-utils/src/server-utils.ts, packages/adapters/claude-local/src/server/parse.ts, packages/adapters/claude-local/src/server/test.ts, packages/adapters/codex-local/src/index.ts, packages/adapters/codex-local/src/server/codex-home.test.ts, packages/adapters/codex-local/src/server/codex-home.ts
+- fork-Aitor1111/paperclip|fork-YukiCrisp/paperclip — пересечение 4 файлов, конфликт в: packages/adapters/claude-local/src/index.ts, packages/adapters/claude-local/src/server/execute.remote.test.ts, packages/adapters/claude-local/src/server/execute.ts, server/src/__tests__/heartbeat-active-run-output-watchdog.test.ts, server/src/__tests__/heartbeat-model-profile.test.ts, server/src/__tests__/heartbeat-process-recovery.test.ts, server/src/index.ts, server/src/routes/agents.ts
+- fork-RajdevShivam/paperclip|pr-9219 — пересечение 3 файлов, конфликт в: packages/adapters/claude-local/src/server/execute.ts, server/src/routes/agents.ts, server/src/services/heartbeat.ts, server/src/services/issues.ts, server/src/services/workspace-runtime.ts, ui/src/api/heartbeats.ts
+- fork-Southeastern-Renovation/paperclip|pr-14039 — пересечение 3 файлов, конфликт в: packages/adapters/claude-local/src/server/acp.ts, packages/shared/src/types/heartbeat.ts, server/src/routes/agents.ts, ui/src/pages/AgentDetail.tsx
+- pr-11466|pr-13892 — пересечение 3 файлов, конфликт в: server/src/services/issues.ts
+- fork-axelweichert/paperclip|pr-10735 — пересечение 3 файлов, конфликт в: packages/shared/src/constants.ts, packages/shared/src/index.ts, packages/shared/src/types/index.ts, server/src/routes/agents.ts, server/src/services/dashboard.ts, server/src/services/heartbeat.ts
+- fork-SEONGMINY/paperclip|fork-keegoid/paperclip — пересечение 3 файлов, конфликт в: packages/adapters/codex-local/src/server/execute.ts, packages/adapters/codex-local/src/ui/build-config.ts, server/src/__tests__/codex-local-execute.test.ts, ui/src/adapters/codex-local/config-fields.tsx, ui/src/components/agent-config-primitives.tsx
+- fork-Aitor1111/paperclip|fork-azibetti/paperclip — пересечение 3 файлов, конфликт в: cli/package.json, pnpm-lock.yaml, server/src/adapters/registry.ts, server/src/home-paths.ts, server/src/routes/issues.ts, server/src/routes/projects.ts, ui/src/App.tsx, ui/src/adapters/registry.ts
+- fork-YukiCrisp/paperclip|fork-qwlong/paperclip — пересечение 3 файлов, конфликт в: packages/adapters/claude-local/src/index.ts
+- fork-keegoid/paperclip|fork-simberthon/paperclip — пересечение 3 файлов, конфликт в: AGENTS.md, packages/adapter-utils/src/index.ts, packages/adapter-utils/src/types.ts, packages/adapters/codex-local/src/server/execute.ts, packages/shared/src/types/heartbeat.ts, server/src/__tests__/claude-local-execute.test.ts, server/src/__tests__/codex-local-execute.test.ts, server/src/__tests__/heartbeat-active-run-output-watchdog.test.ts
+- fork-Southeastern-Renovation/paperclip|fork-keegoid/paperclip — пересечение 3 файлов, конфликт в: AGENTS.md, packages/adapter-utils/src/index.ts, packages/adapter-utils/src/types.ts, packages/adapters/codex-local/src/server/execute.ts, packages/shared/src/types/heartbeat.ts, server/src/__tests__/claude-local-execute.test.ts, server/src/__tests__/codex-local-execute.test.ts, server/src/__tests__/heartbeat-active-run-output-watchdog.test.ts
+- fork-RiyDomingo/paperclip-master|fork-keegoid/paperclip — пересечение 3 файлов, конфликт в: AGENTS.md, packages/adapter-utils/src/index.ts, packages/adapter-utils/src/types.ts, packages/adapters/codex-local/src/server/execute.ts, packages/shared/src/types/heartbeat.ts, server/src/__tests__/claude-local-execute.test.ts, server/src/__tests__/codex-local-execute.test.ts, server/src/__tests__/heartbeat-active-run-output-watchdog.test.ts

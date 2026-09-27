@@ -23,6 +23,7 @@ from fastapi.staticfiles import StaticFiles
 
 from scoring import (KIND_LABELS, NEGATIVE, QUESTION_LABELS, STAGE2_QUESTIONS, auto_areas, cost_comparison,
                      mark_duplicates, score_pr, stage1_questions, stage1_state, verdict)
+import triage
 from triage import (FORK_KIND_LABELS, ISSUE_KIND_LABELS, RIVAL_LABELS, apply_rival, fork_questions,
                     issue_questions, rival_question, score_fork, score_issue)
 
@@ -118,7 +119,8 @@ def load_project(slug):
     p = {"config": read_json(d / "config.json", None)}
     if not p["config"]:
         return
-    for name, default in (("prs", []), ("stage1", {}), ("stage2", {}), ("runs", []), ("issues", {}), ("forks", {}), ("rivals", {}), ("stack", {})):
+    for name, default in (("prs", []), ("stage1", {}), ("stage2", {}), ("runs", []), ("issues", {}), ("forks", {}),
+                          ("rivals", {}), ("stack", {}), ("map", {})):
         p[name] = read_json(d / f"{name}.json", default)
     p["prs"] = {x["number"]: x for x in p["prs"]} if isinstance(p["prs"], list) else {int(k): v for k, v in p["prs"].items()}
     projects[slug] = p
@@ -318,22 +320,38 @@ def http_json(url, data=None, headers=None, timeout=120):
         return json.load(r)
 
 
-def http_json_retry(url, data=None, headers=None, timeout=120, tries=5):
+def http_json_retry(url, data=None, headers=None, timeout=120, tries=8):
     """Same as http_json but survives transient resolver/network blips.
 
     Docker's embedded DNS occasionally answers `No address associated with hostname`
-    for a second or two (a systemd-resolved stub upstream); a paging query losing a
-    page used to abort the whole fetch job.
+    for a second or two (a systemd-resolved stub upstream), and long runs also meet
+    plain connection resets: GitHub over the user's proxy drops a request now and then.
+    Backoff is exponential with jitter, so parallel workers do not retry in lockstep.
     """
     for attempt in range(tries):
         try:
             return http_json(url, data, headers, timeout)
-        except urllib.error.HTTPError:
+        except urllib.error.HTTPError as e:
+            if e.code in (429, 500, 502, 503, 504, 529) and attempt < tries - 1:
+                time.sleep(min(45.0, 1.5 * 2 ** attempt) * (1 + random.random() * 0.4))
+                continue
             raise
         except Exception:
             if attempt == tries - 1:
                 raise
-            time.sleep(1.5 * (attempt + 1))
+            time.sleep(min(45.0, 1.5 * 2 ** attempt) * (1 + random.random() * 0.4))
+
+
+def git_fetch(repo, *args, tries=4):
+    """`git fetch` с повторами: сеть отваливается чаще, чем локальный git."""
+    last = None
+    for attempt in range(tries):
+        r = subprocess.run(["git", "-C", str(repo), "fetch", "-q", "--no-tags", *args], capture_output=True, text=True)
+        if r.returncode == 0:
+            return r
+        last = r
+        time.sleep(min(20.0, 2.0 ** attempt) * (1 + random.random() * 0.4))
+    return last
 
 
 def jev(state_value, questions):
@@ -342,21 +360,26 @@ def jev(state_value, questions):
     TypeSafe names a yes/no question `noul` and answers with `noul`; NordRouter's
     /v1/evaluate only knows `boolean` and answers with `probability`. Translate in
     both directions so scoring.py keeps working against either provider.
+
+    Повторы: 429/5xx и любые сетевые сбои — с экспоненциальной паузой и джиттером
+    (прокси пользователя рвёт соединения, а параллельные воркеры иначе повторяют хором).
     """
     payload = {"model": JEV_MODEL, "state": state_value, "questions": to_provider(questions)}
-    for attempt in range(6):
+    for attempt in range(8):
         try:
             res = http_json(JEV_URL, payload, {"Authorization": f"Bearer {JEV_KEY}", "Content-Type": "application/json"}, 180)
             if res.get("answers"):
                 res["answers"] = from_provider(res["answers"])
             return res
         except urllib.error.HTTPError as e:
-            if e.code in (429, 500, 502, 503, 529):
-                time.sleep(min(30, 2 ** attempt))
+            if e.code in (429, 500, 502, 503, 504, 529) and attempt < 7:
+                time.sleep(min(45.0, 1.5 * 2 ** attempt) * (1 + random.random() * 0.4))
                 continue
             return {"error": f"HTTP {e.code}"}
         except Exception:
-            time.sleep(min(30, 2 ** attempt))
+            if attempt == 7:
+                return {"error": "retries exhausted"}
+            time.sleep(min(45.0, 1.5 * 2 ** attempt) * (1 + random.random() * 0.4))
     return {"error": "retries exhausted"}
 
 
@@ -1048,6 +1071,202 @@ def forks_job(slug):
             "model": "GitHub compare + Jev", **filtered}
 
 
+def hot_map(git, base, commits=400):
+    """Частота правок по файлам в основной ветке — «горячесть» файла для будущих конфликтов."""
+    hot = {}
+    for line in git("log", "-n", str(commits), "--name-only", "--pretty=format:", base).stdout.splitlines():
+        line = line.strip()
+        if line:
+            hot[line] = hot.get(line, 0) + 1
+    return hot
+
+
+def map_job(slug):
+    """Карта мёрджей: попарная совместимость выживших кандидатов и несколько раскладов из неё.
+
+    Что измеряем попарно:
+      * наложение — пересечение множеств файлов (и строк, грубо);
+      * совместимость — живой тестовый мерж в обе стороны (A поверх B и B поверх A);
+      * приоритет — разница баллов плюс ответ Jev «какой из двух лучше, если брать один»;
+      * дубль — вопрос Jev «не одно ли и то же они чинят».
+    Из матрицы собираются расклады: безопасный, всё-в-одно, топ-по-баллу, минимум-поверхности
+    и по одному на подсистему (см. triage.build_plans).
+    """
+    P, t0, started = projects[slug], time.time(), now_iso()
+    cfg = P["config"]
+    mcfg = cfg.get("map") or {}
+    repo = pdir(slug) / "repo"
+    if not (repo / ".git").exists():
+        raise RuntimeError("Нет клона репозитория: сначала нужен этап stage2")
+    base_branch = cfg.get("default_branch") or "main"
+    base = f"origin/{base_branch}"
+
+    def git(*args, check=False, cwd=None):
+        r = subprocess.run(["git", "-C", str(cwd or repo), *args], capture_output=True, text=True)
+        if check and r.returncode:
+            raise RuntimeError(f"git {' '.join(args)}: {r.stderr[-300:]}")
+        return r
+
+    # ---- кандидаты: выжившие PR и лучшие форки с неотправленной работой
+    verdicts = set(mcfg.get("verdicts") or ["take", "consider"])
+    cands = []
+    for n, row in P["rows"].items():
+        if row.get("verdict") in verdicts:
+            cands.append({"id": f"pr-{n}", "kind": "pr", "ref": f"pr-{n}", "number": n, "title": row["title"],
+                          "score": row.get("score") or 0, "area": row.get("area"), "verdict": row.get("verdict")})
+    forks_top = int(mcfg.get("forks_top") or 20)
+    for r in sorted((P.get("fork_rows") or {}).values(), key=lambda r: -(r.get("score") or 0)):
+        if len([c for c in cands if c["kind"] == "fork"]) >= forks_top:
+            break
+        if r.get("classified") and not r.get("duplicate_of") and (r.get("ahead") or 0) > 0:
+            owner = r["fork"].split("/")[0]
+            cands.append({"id": f"fork-{r['fork']}", "kind": "fork", "ref": f"fk-{owner}", "title": r["fork"],
+                          "score": r.get("score") or 0, "area": None, "verdict": "fork",
+                          "branch": r.get("branch"), "repo": r["fork"]})
+    if not cands:
+        return {"stage": "map", "started": started, "seconds": 0, "items": 0, "errors": 0, "input_tokens": 0,
+                "cost_usd": 0, "model": "git + Jev"}
+
+    # ---- ссылки: PR-ветки уже скачаны stage2, ветки форков тянем сами
+    def fetch_ref(c):
+        if c["kind"] == "fork":
+            return c, git("fetch", "-q", "--no-tags", f"https://github.com/{c['repo']}.git",
+                          f"{c['branch']}:{c['ref']}").returncode != 0
+        return c, git("rev-parse", "--verify", "-q", c["ref"]).returncode != 0
+
+    progress(0, len(cands), phase="map-fetch")
+    with cf.ThreadPoolExecutor(MERGE_WORKERS) as ex:
+        for c, failed in ex.map(fetch_ref, cands):
+            if failed:
+                c["missing"] = True
+    cands = [c for c in cands if not c.get("missing")]
+    for c in cands:
+        names = git("diff", "--name-only", f"{base}...{c['ref']}").stdout.split()
+        c["files"] = names
+        shortstat = git("diff", "--shortstat", f"{base}...{c['ref']}").stdout.strip()
+        m = re.search(r"(\d+) insertion", shortstat)
+        c["lines"] = int(m.group(1)) if m else 0
+    hot = hot_map(git, base, int(mcfg.get("hot_commits") or 400))
+    hot_total = sum(hot.values()) or 1
+    for c in cands:
+        c["hot"] = sum(hot.get(f, 0) for f in c["files"])
+        c["hot_share_i"] = c["hot"] / hot_total
+
+    # ---- попарно: наложение и тестовый мерж в обе стороны
+    pairs = [(a, b) for i, a in enumerate(cands) for b in cands[i + 1:]]
+    compat = {}
+    for a, b in pairs:
+        overlap = len(set(a["files"]) & set(b["files"]))
+        compat[triage.pair_key(a["id"], b["id"])] = {"overlap": overlap,
+                                                     "both_files": sorted(set(a["files"]) & set(b["files"]))[:10]}
+    to_merge = [(a, b) for a, b in pairs if compat[triage.pair_key(a["id"], b["id"])]["overlap"] > 0]
+    emit({"type": "log", "message": f"карта мёрджей: {len(cands)} кандидатов, {len(pairs)} пар, "
+                                    f"пересекаются файлами {len(to_merge)} (их и мержим живьём)"})
+    pool, worktrees = Queue(), []
+    git("worktree", "prune")
+    base_sha = git("rev-parse", base).stdout.strip()
+    for i in range(max(1, MERGE_WORKERS)):
+        wt = repo.parent / f"map-{i}"
+        if wt.exists():
+            subprocess.run(["git", "-C", str(repo), "worktree", "remove", "--force", str(wt)], capture_output=True, text=True)
+        if subprocess.run(["git", "-C", str(repo), "worktree", "add", "--detach", "--force", str(wt), base_sha],
+                          capture_output=True, text=True).returncode == 0:
+            worktrees.append(wt)
+            pool.put(wt)
+
+    def merge_pair(args):
+        i, (a, b) = args
+        key = triage.pair_key(a["id"], b["id"])
+        res = {}
+        wt = pool.get()
+        try:
+            for label, order in (("merge", (a, b)), ("merge_rev", (b, a))):
+                subprocess.run(["git", "-C", str(wt), "reset", "-q", "--hard", base_sha], capture_output=True, text=True)
+                subprocess.run(["git", "-C", str(wt), "clean", "-fdq"], capture_output=True, text=True)
+                ok = True
+                for c in order:
+                    # Мерж коммитим: второй мерж в грязном индексе git отклоняет, и раньше это
+                    # выглядело как «конфликт» у каждой пересекающейся пары.
+                    m = subprocess.run(["git", "-C", str(wt), "merge", "-q", "--no-ff", "--no-edit", c["ref"]],
+                                       capture_output=True, text=True)
+                    if m.returncode:
+                        ok = False
+                        res[f"{label}_files"] = subprocess.run(["git", "-C", str(wt), "diff", "--name-only", "--diff-filter=U"],
+                                                              capture_output=True, text=True).stdout.split()[:8]
+                        subprocess.run(["git", "-C", str(wt), "merge", "--abort"], capture_output=True, text=True)
+                        break
+                subprocess.run(["git", "-C", str(wt), "reset", "-q", "--hard", base_sha], capture_output=True, text=True)
+                res[label] = "clean" if ok else "conflict"
+        finally:
+            pool.put(wt)
+        progress(i, len(to_merge), phase="map-merge", pair=key, result=res.get("merge"))
+        return key, res
+
+    try:
+        with cf.ThreadPoolExecutor(max(1, len(worktrees))) as ex:
+            for key, res in ex.map(merge_pair, list(enumerate(to_merge, 1))):
+                compat[key].update(res)
+    finally:
+        for wt in worktrees:
+            subprocess.run(["git", "-C", str(repo), "worktree", "remove", "--force", str(wt)], capture_output=True, text=True)
+        git("worktree", "prune")
+
+    # ---- попарно по смыслу: одно и то же или нет, и какой лучше
+    sem_cap = int(mcfg.get("semantic_pairs") or 150)
+    sem_targets = [(a, b) for a, b in pairs
+                   if (compat[triage.pair_key(a["id"], b["id"])]["overlap"] > 0 or (a.get("area") and a.get("area") == b.get("area")))][:sem_cap]
+    tokens, errors = 0, 0
+    if sem_targets and JEV_KEY:
+        emit({"type": "log", "message": f"смысловое сравнение пар через Jev: {len(sem_targets)} (лимит {sem_cap})"})
+
+        def ask(args):
+            idx, (a, b) = args
+            q = triage.map_pair_questions(a, b)
+            state = {"project": cfg["repo"],
+                     "a": {"title": a["title"], "files": a["files"][:15], "lines": a["lines"], "score": a["score"]},
+                     "b": {"title": b["title"], "files": b["files"][:15], "lines": b["lines"], "score": b["score"]}}
+            return idx, a, b, jev(state, q)
+
+        progress(0, len(sem_targets), phase="map-semantic")
+        with cf.ThreadPoolExecutor(STAGE1_WORKERS) as ex:
+            for idx, a, b, res in ex.map(ask, list(enumerate(sem_targets, 1))):
+                key = triage.pair_key(a["id"], b["id"])
+                if "answers" in res:
+                    tokens += res["usage"]["input_tokens"]
+                    ans = res["answers"]
+                    choice = ans.get("better", {}).get("choice")
+                    compat[key].update({"duplicate": round(ans["same_problem"]["noul"], 2),
+                                        "better": {"a": a["id"], "b": b["id"]}.get(choice, choice)})
+                else:
+                    errors += 1
+                progress(idx, len(sem_targets), phase="map-semantic", tokens=tokens)
+
+    # ---- расклады
+    hot_total_used = sum(c["hot"] for c in cands) or hot_total
+    plans = triage.build_plans(cands, compat, hot_total=float(hot_total), top_n=int(mcfg.get("top_n") or 20))
+    by_id = {c["id"]: c for c in cands}
+    for name, p in plans.items():
+        p["members"] = [{k: c.get(k) for k in ("id", "kind", "title", "score", "area", "lines", "files")} | {"files": len(c.get("files") or [])}
+                        for c in p["members"]]
+    dup_pairs = sorted([{"pair": k, **v} for k, v in compat.items() if (v.get("duplicate") or 0) >= 0.6], key=lambda x: -x["duplicate"])
+    conflict_pairs = sorted([{"pair": k, **v} for k, v in compat.items() if v.get("merge") == "conflict" or v.get("merge_rev") == "conflict"],
+                            key=lambda x: -x["overlap"])
+    result = {
+        "candidates": [{k: c.get(k) for k in ("id", "kind", "title", "score", "area", "verdict", "lines")} | {"files": len(c.get("files") or [])}
+                       for c in sorted(cands, key=lambda c: -(c.get("score") or 0))],
+        "pairs": len(pairs), "pairs_merged": len(to_merge), "pairs_semantic": len(sem_targets),
+        "conflicts": conflict_pairs, "duplicates": dup_pairs, "plans": plans,
+        "hot_commits": int(mcfg.get("hot_commits") or 400),
+    }
+    with lock:
+        P["map"] = result
+        save(slug, "map")
+    recompute(slug)
+    return {"stage": "map", "started": started, "seconds": round(time.time() - t0), "items": len(cands),
+            "errors": errors, "conflicts": len(conflict_pairs), "input_tokens": tokens,
+            "cost_usd": round(tokens * PRICE_PER_MTOK / 1e6, 4), "model": "git + Jev"}
+
+
 def stack_job(slug):
     """Оценить цену поддержки нашего стека: собрать его вживую и посчитать конфликты.
 
@@ -1321,6 +1540,8 @@ def summary(slug: str):
                           "total": len(P.get("forks") or {}),
                           "ranked": sorted([r for r in forks if r["classified"] and not r.get("duplicate_of")], key=lambda r: -(r.get("score") or 0))[:20]},
                 "stack": P.get("stack") or {},
+                "map": {k: v for k, v in (P.get("map") or {}).items() if k != "candidates"} | {
+                    "candidate_list": (P.get("map") or {}).get("candidates") or []} if P.get("map") else {},
                 "rivals": {"groups": len(P.get("rivals") or {}),
                            "picked": sum(1 for r in (P.get("rivals") or {}).values() if r.get("chosen_pr")),
                            "list": list((P.get("rivals") or {}).values())},
@@ -1355,6 +1576,13 @@ def get_stack(slug: str):
         return (P.get("stack") or {})
 
 
+@app.get("/api/p/{slug}/map")
+def get_map(slug: str):
+    P = get_project(slug)
+    with lock:
+        return (P.get("map") or {})
+
+
 @app.get("/api/p/{slug}/criteria")
 def criteria(slug: str):
     cfg = get_project(slug)["config"]
@@ -1382,6 +1610,7 @@ async def start_job(slug: str, name: str, request: Request):
         "forks": [fetch_forks_job, forks_job], "forks_meta": [fetch_forks_job], "forks_compare": [forks_job],
         "rivals": [rivals_job],
         "stack": [stack_job],
+        "map": [map_job],
     }
     if name not in pipelines:
         raise HTTPException(404)

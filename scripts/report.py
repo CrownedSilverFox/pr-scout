@@ -171,6 +171,51 @@ if rivals:
         out.append(f"- issue #{issue_no} ({r.get('issue_title') or '—'}): кандидаты {cands} → **берём {verdict}** "
                    f"(уверенность {r.get('confidence')}, proper_fix {r.get('proper_fix')})\n")
 
+mapping = json.loads((ROOT / "data/last-run-map.json").read_text()) if (ROOT / "data/last-run-map.json").exists() else {}
+if mapping:
+    plans = mapping.get("plans") or {}
+    names = {"safe": "Безопасный — максимум по баллу без конфликтов внутри",
+             "all_in": "Всё в одно — конфликты разбираем руками",
+             "top_score": "Топ по баллу — цена поддержки не важна",
+             "low_churn": "Минимум поверхности — что реже ломается апстримом",
+             "by_area": "По одному на подсистему — шире, а не глубже"}
+    out += ["", "# Карта мёрджей: попарный анализ и расклады", "",
+            f"Кандидатов {len(mapping.get('candidate_list') or [])} (выжившие PR + лучшие форки), "
+            f"пар {mapping.get('pairs')}, живьём мержили пересекающиеся по файлам: {mapping.get('pairs_merged')}, "
+            f"смысловое сравнение через Jev: {mapping.get('pairs_semantic')}.", "",
+            "| расклад | берём | сумма баллов | конфликтов внутри | файлов | горячих правок |",
+            "|---|---:|---:|---:|---:|---:|"]
+    for key, title in names.items():
+        p = plans.get(key) or {}
+        if not p:
+            continue
+        out.append(f"| **{title}** | {p.get('count')} | {p.get('score_sum')} | {p.get('conflicts')} | "
+                   f"{p.get('files')} | {p.get('hot_share')}% |")
+    for key, title in names.items():
+        p = plans.get(key) or {}
+        if not p:
+            continue
+        out += ["", f"## Расклад: {title}", "",
+                f"Берём {p.get('count')} ({p.get('kinds', {}).get('pr', 0)} PR + {p.get('kinds', {}).get('fork', 0)} форков), "
+                f"сумма баллов {p.get('score_sum')}, конфликтов внутри {p.get('conflicts')}, "
+                f"файлов {p.get('files')}, доля горячих правок {p.get('hot_share')}%.", ""]
+        for m in (p.get("members") or [])[:40]:
+            out.append(f"- `{m['id']}` [{m['title']}](https://github.com/{REPO}/{'pull' if m['kind'] == 'pr' else ''}"
+                       f"{str(m['id']).split('-', 1)[1] if m['kind'] == 'pr' else ''}) — балл {m.get('score')}, "
+                       f"{m.get('files')} файлов, {m.get('lines')} строк")
+        if p.get("conflict_pairs"):
+            out += ["", "  Конфликтные пары внутри расклада: "
+                        + ", ".join(f"{x[0]}×{x[1]}" for x in p["conflict_pairs"][:10])]
+    if mapping.get("duplicates"):
+        out += ["", "## Пары, которые Jev считает одной и той же работой", ""]
+        for d in mapping["duplicates"][:20]:
+            out.append(f"- {d['pair']} — дубль {d.get('duplicate')}, лучше: {d.get('better')}")
+    if mapping.get("conflicts"):
+        out += ["", "## Пары, которые не мержатся вместе", ""]
+        for c in mapping["conflicts"][:20]:
+            out.append(f"- {c['pair']} — пересечение {c.get('overlap')} файлов"
+                       + (f", конфликт в: {', '.join(c.get('merge_files') or c.get('merge_rev_files') or [])}" if (c.get('merge_files') or c.get('merge_rev_files')) else ""))
+
 d = time.strftime("%Y-%m-%d")
 path = ROOT / "reports" / f"{d}-{SLUG.replace('__', '-')}.md"
 path.parent.mkdir(exist_ok=True)

@@ -25,7 +25,8 @@ def api(path, timeout=300):
 out = ROOT / "data"
 for name, path in (("last-run-summary", "/api/p/%s/summary"), ("last-run-prs", "/api/p/%s/prs"),
                    ("last-run-issues", "/api/p/%s/issues"), ("last-run-forks", "/api/p/%s/forks"),
-                   ("last-run-rivals", "/api/p/%s/rivals"), ("last-run-stack", "/api/p/%s/stack")):
+                   ("last-run-rivals", "/api/p/%s/rivals"), ("last-run-stack", "/api/p/%s/stack"),
+                   ("last-run-map", "/api/p/%s/map")):
     (out / f"{name}.json").write_text(json.dumps(api(path % SLUG), ensure_ascii=False, indent=2))
     print("сохранил", name)
 
