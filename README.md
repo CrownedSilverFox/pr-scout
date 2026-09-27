@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="app/static/logo.svg" width="84" alt="PR Scout">
+<img src="web/public/logo.svg" width="84" alt="PR Scout">
 
 # PR Scout
 
