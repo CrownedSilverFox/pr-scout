@@ -117,15 +117,50 @@ if issues:
 
 if forks:
     ahead = [f for f in forks if (f.get("ahead") or 0) > 0]
-    out += ["", f"# Форки: проверено {len(forks)}, с коммитами впереди upstream — {len(ahead)}", "",
+    uniq = [f for f in forks if f.get("classified") and not f.get("duplicate_of")]
+    dups = [f for f in forks if f.get("duplicate_of")]
+    clusters = {}
+    for f in dups:
+        clusters.setdefault(f["duplicate_of"], []).append(f["fork"])
+    out += ["", f"# Форки: проверено {len(forks)}, с коммитами впереди upstream — {len(ahead)}",
+            f"После схлопывания клонов уникальных кандидатов — **{len(uniq)}** "
+            f"(клонов одной и той же линии работы: {len(dups)} в {len(clusters)} группах)", "",
             "## Форки, которые стоит разобрать (в них есть работа, не отправленная в upstream)", ""]
-    for f in sorted([f for f in forks if f.get("classified")], key=lambda r: -(r.get("score") or 0))[:40]:
+    for f in sorted(uniq, key=lambda r: -(r.get("score") or 0))[:40]:
         out.append(f"**[{f['fork']}](https://github.com/{f['fork']})** — балл **{f.get('score')}**, "
                    f"`{f.get('kind_label')}`, впереди {f.get('ahead')} коммитов, позади {f.get('behind')}, "
                    f"±{f.get('lines')} строк, ★{f.get('stars')}, пуш {str(f.get('pushed'))[:10]}, "
                    f"ценность {f.get('value')}/4, дубль {f.get('duplicate')}, секреты {f.get('secrets')}")
         for c in (f.get("commits") or [])[:5]:
             out.append(f"  - `{c.get('sha')}` {c.get('date')} {c.get('message')}")
+        out.append("")
+    if clusters:
+        out += ["## Клоны (та же линия работы, что у представителя)", ""]
+        for rep, members in list(clusters.items())[:15]:
+            out.append(f"- {rep}: ещё {len(members)} — " + ", ".join(members[:8]))
+        out.append("")
+
+stack = json.loads((ROOT / "data/last-run-stack.json").read_text()) if (ROOT / "data/last-run-stack.json").exists() else {}
+if stack:
+    hot = stack.get("hot") or {}
+    out += ["", "# Стек: цена поддержки при мёрдже апстрима", "",
+            f"Собрали {stack.get('considered')} выбранных PR ({', '.join(stack.get('verdicts') or [])}) "
+            f"последовательно в основную ветку:", "",
+            f"- влились чисто: **{stack.get('merged')}**",
+            f"- конфликтов при сборке: **{stack.get('conflicted')}** ({stack.get('merge_cost')}%)",
+            f"- объём патча: {stack.get('patch', {}).get('files')} файлов, {stack.get('patch', {}).get('shortstat')}",
+            f"- поверхность будущих конфликтов: **{hot.get('churn_share')}%** правок upstream за последние "
+            f"{hot.get('commits_scanned')} коммитов приходятся на файлы, которые патчит наш стек "
+            f"({hot.get('hot_in_stack')} из {hot.get('files_in_stack')} наших файлов)", ""]
+    if stack.get("conflicts"):
+        out += ["## Что конфликтует", ""]
+        for c in stack["conflicts"]:
+            out.append(f"- #{c['number']}: " + ", ".join(c.get("files") or [])[:160])
+        out.append("")
+    if hot.get("hot_top"):
+        out += ["## Самые горячие файлы, которые мы патчим (правок upstream за окно)", ""]
+        for h in hot["hot_top"][:15]:
+            out.append(f"- `{h['file']}` — {h['edits']}")
         out.append("")
 
 if rivals:

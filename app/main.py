@@ -3,6 +3,7 @@ import asyncio
 import base64
 import concurrent.futures as cf
 import datetime as dt
+import hashlib
 import json
 import os
 import re
@@ -117,7 +118,7 @@ def load_project(slug):
     p = {"config": read_json(d / "config.json", None)}
     if not p["config"]:
         return
-    for name, default in (("prs", []), ("stage1", {}), ("stage2", {}), ("runs", []), ("issues", {}), ("forks", {}), ("rivals", {})):
+    for name, default in (("prs", []), ("stage1", {}), ("stage2", {}), ("runs", []), ("issues", {}), ("forks", {}), ("rivals", {}), ("stack", {})):
         p[name] = read_json(d / f"{name}.json", default)
     p["prs"] = {x["number"]: x for x in p["prs"]} if isinstance(p["prs"], list) else {int(k): v for k, v in p["prs"].items()}
     projects[slug] = p
@@ -203,10 +204,37 @@ def fork_rows(P):
             row.update(score_fork(v, v["answers"]))
             row["kind_label"] = FORK_KIND_LABELS.get(row.get("kind"), row.get("kind"))
         rows[k] = row
-    ranked = sorted([r for r in rows.values() if r["classified"]], key=lambda r: -r["score"])
+    mark_fork_clusters(rows)
+    ranked = sorted([r for r in rows.values() if r["classified"] and not r.get("duplicate_of")], key=lambda r: -r["score"])
     for i, r in enumerate(ranked, 1):
         r["rank"] = i
     return rows
+
+
+def mark_fork_clusters(rows):
+    """Форки с одинаковым набором коммитов впереди — одна линия работы, размноженная по форкам.
+
+    На живых данных это не редкость: пять форков несли буквально одни и те же мержи
+    («Merge pull request #8 from numman-ali/…», «#31 from tylerwince/…») и получали
+    похожие баллы. Считаем их одним кандидатом: представителем становится лучший по
+    баллу, остальные помечаются duplicate_of — как mark_duplicates делает для PR.
+    """
+    groups = {}
+    for r in rows.values():
+        if not r.get("classified"):
+            continue
+        msgs = sorted(c.get("message", "") for c in (r.get("commits") or []) if c.get("message"))
+        if not msgs:
+            continue
+        groups.setdefault(hashlib.sha1("\n".join(msgs).encode()).hexdigest()[:12], []).append(r)
+    for key, members in groups.items():
+        if len(members) < 2:
+            continue
+        best = max(members, key=lambda r: (r.get("score") or 0, r.get("stars") or 0, r.get("pushed") or ""))
+        for r in members:
+            r["cluster"] = key
+            r["cluster_size"] = len(members)
+            r["duplicate_of"] = None if r is best else best["fork"]
 
 
 def get_project(slug):
@@ -1020,6 +1048,97 @@ def forks_job(slug):
             "model": "GitHub compare + Jev", **filtered}
 
 
+def stack_job(slug):
+    """Оценить цену поддержки нашего стека: собрать его вживую и посчитать конфликты.
+
+    Метрика отвечает на вопрос «сколько нам будет стоить мёрдж апстрима, если мы возьмём
+    эти PR»:
+      1. порядок и конфликты при сборке — выбранные PR вливаются по одному в master,
+         конфликтующие пропускаются (их имена и файлы сохраняются);
+      2. пересечение с «горячими» файлами upstream — берём последние HOT_COMMITS коммитов
+         main-ветки, считаем частоту правок по файлам и смотрим, какая доля правок
+         upstream приходится на файлы, которые мы патчим. Это и есть будущая поверхность
+         конфликтов: чем выше, тем дороже каждый следующий подтяг апстрима;
+      3. объём патча — строки и файлы, чтобы прикинуть стоимость ревью и переноса.
+    """
+    P, t0, started = projects[slug], time.time(), now_iso()
+    cfg = P["config"]
+    scfg = cfg.get("stack") or {}
+    verdicts = set(scfg.get("verdicts") or ["take", "consider"])
+    limit = int(scfg.get("limit") or 0)
+    hot_commits = int(scfg.get("hot_commits") or 400)
+    repo = pdir(slug) / "repo"
+    if not (repo / ".git").exists():
+        raise RuntimeError("Нет клона репозитория: сначала нужен этап stage2")
+    base = f"origin/{cfg.get('default_branch') or 'main'}"
+
+    def git(*args, check=False):
+        r = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
+        if check and r.returncode:
+            raise RuntimeError(f"git {' '.join(args)}: {r.stderr[-300:]}")
+        return r
+
+    chosen = sorted([n for n, r in P["rows"].items() if r.get("verdict") in verdicts], key=lambda n: -(P["rows"][n].get("score") or 0))
+    if limit:
+        chosen = chosen[:limit]
+    if not chosen:
+        return {"stage": "stack", "started": started, "seconds": 0, "items": 0, "errors": 0, "input_tokens": 0,
+                "cost_usd": 0, "model": "git"}
+    git("config", "user.email", "scout@localhost"); git("config", "user.name", "PR Scout")
+    git("fetch", "-q", "--no-tags", "origin", check=True)
+    with cf.ThreadPoolExecutor(MERGE_WORKERS) as ex:
+        for n, failed in ex.map(lambda n: (n, git("fetch", "-q", "origin", f"pull/{n}/head:pr-{n}").returncode != 0), chosen):
+            if failed:
+                emit({"type": "log", "message": f"#{n}: ветку не скачать, пропускаю"})
+    git("merge", "--abort")
+    git("checkout", "-q", "-B", "stack-sim", base, check=True)
+    git("reset", "-q", "--hard", base)
+
+    merged, conflicted, skipped = [], [], []
+    progress(0, len(chosen), phase="stack")
+    for i, n in enumerate(chosen, 1):
+        if git("rev-parse", "--verify", "-q", f"pr-{n}").returncode:
+            skipped.append({"number": n, "why": "нет ветки"})
+            progress(i, len(chosen), n, phase="stack", merge="нет ветки")
+            continue
+        m = git("merge", "-q", "--no-ff", "--no-edit", f"pr-{n}")
+        if m.returncode == 0:
+            merged.append(n)
+            progress(i, len(chosen), n, phase="stack", merge="merged")
+        else:
+            files = git("diff", "--name-only", "--diff-filter=U").stdout.split()
+            git("merge", "--abort")
+            conflicted.append({"number": n, "files": files[:15], "message": (m.stderr or m.stdout)[-200:]})
+            progress(i, len(chosen), n, phase="stack", merge="conflict")
+    # 2. горячие файлы upstream
+    hot = {}
+    log = git("log", "-n", str(hot_commits), "--name-only", "--pretty=format:").stdout
+    for line in log.splitlines():
+        line = line.strip()
+        if line:
+            hot[line] = hot.get(line, 0) + 1
+    touched = set(git("diff", "--name-only", f"{base}...stack-sim").stdout.split())
+    adds = git("diff", "--shortstat", f"{base}...stack-sim").stdout.strip()
+    total_hot = sum(hot.values()) or 1
+    hot_overlap = sorted(((f, hot[f]) for f in touched if f in hot), key=lambda kv: -kv[1])
+    weight = sum(w for _, w in hot_overlap) / total_hot
+    result = {
+        "verdicts": sorted(verdicts), "considered": len(chosen), "merged": len(merged), "conflicted": len(conflicted),
+        "skipped": skipped, "conflicts": conflicted, "merged_prs": merged,
+        "patch": {"files": len(touched), "shortstat": adds},
+        "hot": {"commits_scanned": hot_commits, "files_in_stack": len(touched), "hot_in_stack": len(hot_overlap),
+                "hot_top": [{"file": f, "edits": w} for f, w in hot_overlap[:20]],
+                "churn_share": round(100 * weight, 2)},
+        "merge_cost": round(100 * len(conflicted) / max(1, len(chosen)), 1),
+    }
+    with lock:
+        P["stack"] = result
+        save(slug, "stack")
+    recompute(slug)
+    return {"stage": "stack", "started": started, "seconds": round(time.time() - t0), "items": len(chosen),
+            "errors": len(conflicted), "input_tokens": 0, "cost_usd": 0, "model": "git"}
+
+
 def rivals_job(slug):
     """One issue, several pull requests: ask Jev which one to take."""
     P, t0, started = projects[slug], time.time(), now_iso()
@@ -1197,8 +1316,11 @@ def summary(slug: str):
                            "ranked": sorted([r for r in issues if r["classified"]], key=lambda r: -(r.get("score") or 0))[:20]},
                 "forks": {"scanned": len(forks), "ahead": sum(1 for r in forks if (r.get("ahead") or 0) > 0),
                           "classified": sum(r["classified"] for r in forks),
+                          "duplicates": sum(1 for r in forks if r.get("duplicate_of")),
+                          "clusters": len({r["cluster"] for r in forks if r.get("cluster")}),
                           "total": len(P.get("forks") or {}),
-                          "ranked": sorted([r for r in forks if r["classified"]], key=lambda r: -(r.get("score") or 0))[:20]},
+                          "ranked": sorted([r for r in forks if r["classified"] and not r.get("duplicate_of")], key=lambda r: -(r.get("score") or 0))[:20]},
+                "stack": P.get("stack") or {},
                 "rivals": {"groups": len(P.get("rivals") or {}),
                            "picked": sum(1 for r in (P.get("rivals") or {}).values() if r.get("chosen_pr")),
                            "list": list((P.get("rivals") or {}).values())},
@@ -1224,6 +1346,13 @@ def list_rivals(slug: str):
     P = get_project(slug)
     with lock:
         return (P.get("rivals") or {})
+
+
+@app.get("/api/p/{slug}/stack")
+def get_stack(slug: str):
+    P = get_project(slug)
+    with lock:
+        return (P.get("stack") or {})
 
 
 @app.get("/api/p/{slug}/criteria")
@@ -1252,6 +1381,7 @@ async def start_job(slug: str, name: str, request: Request):
         "issues": [fetch_issues_job, issues_job], "issues_meta": [fetch_issues_job], "issues_jev": [issues_job],
         "forks": [fetch_forks_job, forks_job], "forks_meta": [fetch_forks_job], "forks_compare": [forks_job],
         "rivals": [rivals_job],
+        "stack": [stack_job],
     }
     if name not in pipelines:
         raise HTTPException(404)

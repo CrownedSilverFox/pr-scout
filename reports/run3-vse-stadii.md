@@ -12,6 +12,7 @@
 - `forks-list`: 15624 шт · 154 с · $0 · ошибок 0
 - `forks-list`: 15627 шт · 144 с · $0 · ошибок 0
 - `forks`: 1844 шт · 295 с · $0.1435 · ошибок 0
+- `stack`: 42 шт · 36 с · $0 · ошибок 3
 
 Последний цикл: 14569284 входных токенов, $0.7286. Все прогоны в истории: 23713640 токенов, $1.5211.
 
@@ -981,6 +982,7 @@
 
 
 # Форки: проверено 15614, с коммитами впереди upstream — 1851
+После схлопывания клонов уникальных кандидатов — **1783** (клонов одной и той же линии работы: 68 в 22 группах)
 
 ## Форки, которые стоит разобрать (в них есть работа, не отправленная в upstream)
 
@@ -1211,6 +1213,58 @@
   - `6ccb263f` 2026-05-21 Merge branch 'paperclipai:master' into master
   - `03d764bd` 2026-05-22 Add model fallback chains and priority-based model tiers.
   - `e84d3533` 2026-05-23 Merge branch 'paperclipai:master' into master
+
+## Клоны (та же линия работы, что у представителя)
+
+- supertaz/paperclip: ещё 1 — hochy/paperclip
+- bhullansaab/paperclip: ещё 1 — alexorbit/paperclip
+- tmartin2113/paperclip: ещё 4 — tr00x/paperclip, BentoStudioIO/paperclip, hhhhansel/paperclip, chewkaah/razorclip
+- renegadesw/paperclip: ещё 2 — junjzhang/paperclip, kartamyshev-dev/loginom-swarm
+- acent-labs/acent-ax-paperclip: ещё 1 — acent-labs/acent-ops
+- dnalexxio/paperclip: ещё 1 — simonjanleon-ai/company.simfinz.com
+- rebel-jp/paperclip: ещё 2 — CharlieCoombes/paperclip, jay111112312331/paperclip
+- cunninghambe/paperclip: ещё 1 — luxbotopenclaw/autogeny-platform
+- NSTY-J/NstyPaperclip: ещё 2 — mr-mmh/paperclip, embraceid/paperclip
+- NanoRoss/paperclip: ещё 3 — Erwinschmidt79/paperclip, sujungchris-boop/agency-os, carlitoshub/paperclip
+- sramandip362-lgtm/paperclip: ещё 19 — pegasushn/paperclip, kevkoch/paperclip, adrian-gg1/paperclip, radhakrishnadeepakkumar-afk/paperclip, jdadahan/paperclip, sideprojectmate/paperclip, Schokobaum/paperclip, KelvintranHC/paperclip
+- uritell/paperclip: ещё 2 — ConorMHanlon/paperclip, alinkenauger/paperclip
+- gtosil/paperclip: ещё 2 — BrunoIurko/kahona, alexor87/paperclip
+- iDoishere/paperclip: ещё 1 — rootspet/paperclip-railway
+- tiamogo/paperclip: ещё 3 — devdroid3/paperclip, Daubthi/paperclip, MattCarneiro/paperclip
+
+
+# Стек: цена поддержки при мёрдже апстрима
+
+Собрали 42 выбранных PR (consider, take) последовательно в основную ветку:
+
+- влились чисто: **39**
+- конфликтов при сборке: **3** (7.1%)
+- объём патча: 195 файлов, 195 files changed, 11091 insertions(+), 549 deletions(-)
+- поверхность будущих конфликтов: **17.13%** правок upstream за последние 400 коммитов приходятся на файлы, которые патчит наш стек (160 из 195 наших файлов)
+
+## Что конфликтует
+
+- #14248: server/src/__tests__/issue-execution-policy.test.ts
+- #12786: packages/adapter-utils/src/command-redaction.ts
+- #13892: server/src/services/issues.ts
+
+## Самые горячие файлы, которые мы патчим (правок upstream за окно)
+
+- `server/src/services/heartbeat.ts` — 68
+- `doc/execution-semantics.md` — 33
+- `server/src/services/native-runtime/native-session-executor.ts` — 31
+- `ui/src/pages/IssueDetail.tsx` — 28
+- `server/src/services/native-runtime/native-session-executor.test.ts` — 26
+- `server/src/routes/issues.ts` — 25
+- `server/src/__tests__/tool-access-service.test.ts` — 22
+- `server/src/routes/agents.ts` — 21
+- `server/src/services/tool-access.ts` — 20
+- `doc/SPEC-implementation.md` — 19
+- `packages/shared/src/index.ts` — 18
+- `ui/src/components/TaskChatThread.tsx` — 18
+- `server/src/routes/openapi.ts` — 17
+- `server/src/__tests__/heartbeat-process-recovery.test.ts` — 16
+- `ui/src/pages/IssueDetail.test.tsx` — 15
 
 
 # Один issue — несколько PR: кого брать (34 групп)
