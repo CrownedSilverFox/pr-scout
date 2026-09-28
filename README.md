@@ -184,10 +184,17 @@ cd web && npm run dev   # Vite на :5173, /api проксируется на б
 
 | Переменная | | Описание |
 |---|---|---|
-| `TYPESAFE_API_KEY` | обязательно | ключ Jev |
+| `TYPESAFE_API_KEY` | один из двух | ключ Jev у TypeSafe |
+| `NORDROUTER_API_KEY` | один из двух | ключ Jev у NordRouter (тот же Jev, $0.05 за 1M входных токенов); им же пишутся описания без GPU |
+| `JEV_PROVIDER` | | `typesafe` или `nordrouter`; без него провайдер определяется по заданному ключу, при обоих — TypeSafe |
+| `JEV_API_URL`, `JEV_MODEL`, `JEV_PRICE_PER_MTOK` | | переопределить эндпоинт, модель и цену за 1M токенов (по умолчанию — значения выбранного провайдера) |
 | `APP_PASSWORD` | рекомендуется | пароль для входа (HTTP Basic, логин любой) |
 | `GITHUB_TOKEN` | рекомендуется | токен без прав: лимит 5000 запросов/ч вместо 60 и статус CI финалистов |
 | `OLLAMA_URL` | | адрес Ollama, по умолчанию `http://host.docker.internal:11434` |
+| `DESCRIBER_MODEL` | | модель для описаний через NordRouter, по умолчанию `google/gemini-3.1-flash-lite` |
+| `JEV_STAGE1_WORKERS`, `JEV_STAGE2_WORKERS` | | параллельные запросы к Jev, по умолчанию 14 и 10 (у NordRouter лимит 15 rps) |
+| `JEV_MERGE_WORKERS` | | параллельные тестовые мержи в git worktree, по умолчанию 4 |
+| `FORK_REST_WORKERS`, `FORK_LIST_WORKERS` | | параллельность разбора форков, по умолчанию 16 и 8 |
 | `DATA_DIR` | | где хранить данные, по умолчанию `/data` |
 | `SCOUT_PORT` | | порт на хосте для `docker compose`, по умолчанию `8000` |
 
@@ -216,7 +223,15 @@ POST /api/projects                     {"url": "https://github.com/owner/repo", 
 GET  /api/p/{owner__repo}/summary      итоги, прогоны, сравнение стоимости
 GET  /api/p/{owner__repo}/prs          все PR с баллами и вердиктами
 GET  /api/p/{owner__repo}/prs/{n}      один PR со всеми ответами Jev
-POST /api/p/{owner__repo}/jobs/full    полный прогон (или fetch · describe · stage1 · stage2)
+GET  /api/p/{owner__repo}/issues       открытые issues с оценкой Jev и PR, которые их закрывают
+GET  /api/p/{owner__repo}/forks        форки с работой, не отправленной в апстрим
+GET  /api/p/{owner__repo}/rivals       несколько PR на одну issue: кого брать
+GET  /api/p/{owner__repo}/stack        сборка выбранных PR: конфликты и цена поддержки
+GET  /api/p/{owner__repo}/map          карта мержей: попарная совместимость и пять раскладов
+GET  /api/p/{owner__repo}/report.md    весь цикл одним markdown-отчётом
+POST /api/p/{owner__repo}/jobs/full    прогон PR (или fetch · describe · stage1 · stage2)
+POST /api/p/{owner__repo}/jobs/everything   весь цикл: PR → issues → конкуренты → форки → стек → карта
+                                       (или отдельно: issues · rivals · forks · stack · map)
 GET  /api/events                       поток событий прогона (SSE)
 ```
 
@@ -225,31 +240,6 @@ GET  /api/events                       поток событий прогона 
 - **Фронт:** React 19, TypeScript, Vite, Tailwind CSS 4, [shadcn/ui](https://ui.shadcn.com) на Radix, TanStack Query и TanStack Table, Recharts, react-hook-form + zod, zustand, lucide, sonner.
 - **Бэкенд:** Python 3.12, FastAPI, SSE для живого прогона, git для тестового мержа.
 - **Данные:** JSON-файлы в `DATA_DIR`, база не нужна. Один Docker-образ: фронт собирается на первом этапе и отдаётся тем же FastAPI.
-
-## Локальный запуск на NordRouter (наш форк-адаптация)
-
-Оригинал ходит в Jev через `https://api.typesafe.ai/v1/systemone` с ключом TypeSafe.
-Тот же Jev есть в NordRouter, поэтому Scout работает и на нём — правки минимальные (см. `git log`):
-
-| Что | Было | Стало |
-|---|---|---|
-| Эндпоинт | хардкод `api.typesafe.ai/v1/systemone` | `JEV_API_URL` (по умолчанию NordRouter `/v1/evaluate`) |
-| Модель | хардкод `jev-latest` | `JEV_MODEL=typesafe-ai/jev` |
-| Ключ | только `TYPESAFE_API_KEY` | `NORDROUTER_API_KEY` или `TYPESAFE_API_KEY` |
-| Тип вопроса | `noul` | NordRouter знает только `boolean` → `to_provider()` переводит туда и `from_provider()` возвращает ответ в `noul` |
-| Цена для панели | хардкод `0.042` | `JEV_PRICE_PER_MTOK` (NordRouter берёт `$0.05`/1M — по заголовку `X-Charged-USD`) |
-| Параллелизм | `ThreadPool(16)` / `(12)` | `JEV_STAGE1_WORKERS=14`, `JEV_STAGE2_WORKERS=10` (у NordRouter лимит 15 rps) |
-
-Проверено живыми вызовами против NordRouter: `state` объектом и строкой, `criteria` объектом/списком,
-`instructions` строкой и объектом `{question, our_setup}`, полный набор из 15 вопросов этапа 1,
-32 параллельных запроса без 429. `noul` на NordRouter даёт `400 upstream_error` —
-это единственное реальное расхождение провайдеров.
-
-Наши цены (NordRouter, `$0.05`/1M вход, выход не тарифицируется): этап 1 ≈ `$0.00005` за PR,
-то есть 3 000 PR ≈ `$0,15`, быстрее и дешевле, чем в таблице ниже (там цены TypeSafe).
-
-Отличия от оригинала в эксплуатации: Docker требует `sudo` (пользователь `crnsfx` в группе `docker`
-с нового логина), `data/` — volume `scout_data`, UI слушает `127.0.0.1:8000`.
 
 ## Лицензия
 

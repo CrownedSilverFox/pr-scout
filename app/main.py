@@ -6,6 +6,7 @@ import datetime as dt
 import hashlib
 import json
 import os
+import random
 import re
 import secrets
 import shutil
@@ -24,40 +25,60 @@ from fastapi.staticfiles import StaticFiles
 from scoring import (KIND_LABELS, NEGATIVE, QUESTION_LABELS, STAGE2_QUESTIONS, auto_areas, cost_comparison,
                      mark_duplicates, score_pr, stage1_questions, stage1_state, verdict)
 import triage
-from triage import (FORK_KIND_LABELS, ISSUE_KIND_LABELS, RIVAL_LABELS, apply_rival, fork_questions,
+from triage import (FORK_KIND_LABELS, ISSUE_KIND_LABELS, apply_rival, fork_questions,
                     issue_questions, rival_question, score_fork, score_issue)
+from report import build_report
+
+
+def env(name, default=""):
+    """An environment variable; docker compose passes unset ones as empty strings, so empty means default."""
+    return os.environ.get(name) or default
+
 
 APP_DIR = Path(__file__).parent
-DATA = Path(os.environ.get("DATA_DIR", "/data"))
+DATA = Path(env("DATA_DIR", "/data"))
 PRESETS = APP_DIR.parent / "presets"
-# Jev endpoint. Two interchangeable providers:
-#   TypeSafe   https://api.typesafe.ai/v1/systemone   (types: noul / choice / score)
-#   NordRouter https://nordrouter.com/v1/evaluate     (types: boolean / choice / score)
-# NordRouter rejects `noul` with 400 upstream_error, so jev() translates it both ways.
-JEV_URL = os.environ.get("JEV_API_URL", "https://api.typesafe.ai/v1/systemone")
-JEV_MODEL = os.environ.get("JEV_MODEL", "jev-latest")
-JEV_KEY = os.environ.get("TYPESAFE_API_KEY") or os.environ.get("NORDROUTER_API_KEY", "")
-GH_TOKEN = os.environ.get("GITHUB_TOKEN", "")
-PASSWORD = os.environ.get("APP_PASSWORD", "")
-OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://host.docker.internal:11434").rstrip("/")
-# USD per 1M input tokens: TypeSafe 0.042, NordRouter 0.05 (measured from X-Charged-USD).
-PRICE_PER_MTOK = float(os.environ.get("JEV_PRICE_PER_MTOK", "0.042"))
-# NordRouter allows 15 rps; stage 1 is ~1.1 s per PR, so 16 workers sit right at the limit.
-STAGE1_WORKERS = int(os.environ.get("JEV_STAGE1_WORKERS", "14"))
-STAGE2_WORKERS = int(os.environ.get("JEV_STAGE2_WORKERS", "10"))
+# Jev is served by two providers, the same model behind different endpoints:
+#   TypeSafe   https://api.typesafe.ai/v1/systemone   TYPESAFE_API_KEY    yes/no questions are `noul`
+#   NordRouter https://nordrouter.com/v1/evaluate     NORDROUTER_API_KEY  yes/no questions are `boolean`
+# JEV_PROVIDER picks one. Unset, TypeSafe wins whenever its key is present, so an existing setup keeps
+# talking to TypeSafe, and a key only ever goes to the provider it belongs to.
+JEV_PROVIDERS = {
+    "typesafe": {"name": "TypeSafe", "url": "https://api.typesafe.ai/v1/systemone", "model": "jev-latest", "key": "TYPESAFE_API_KEY", "price": 0.042},
+    "nordrouter": {"name": "NordRouter", "url": "https://nordrouter.com/v1/evaluate", "model": "typesafe-ai/jev", "key": "NORDROUTER_API_KEY", "price": 0.05},
+}
+JEV_PROVIDER = env("JEV_PROVIDER", "nordrouter" if env("NORDROUTER_API_KEY") and not env("TYPESAFE_API_KEY") else "typesafe").lower()
+if JEV_PROVIDER not in JEV_PROVIDERS:
+    print(f"JEV_PROVIDER={JEV_PROVIDER!r} is unknown, falling back to typesafe", flush=True)
+    JEV_PROVIDER = "typesafe"
+_JEV = JEV_PROVIDERS[JEV_PROVIDER]
+JEV_URL = env("JEV_API_URL", _JEV["url"])
+JEV_MODEL = env("JEV_MODEL", _JEV["model"])
+JEV_KEY = env(_JEV["key"])
+JEV_LABEL = f"{JEV_MODEL} · {_JEV['name']}"  # what the run history shows as the model
+# USD per 1M input tokens, for the cost panel: TypeSafe lists 0.042, NordRouter charges 0.05 (X-Charged-USD).
+PRICE_PER_MTOK = float(env("JEV_PRICE_PER_MTOK", str(_JEV["price"])))
+GH_TOKEN = env("GITHUB_TOKEN")
+PASSWORD = env("APP_PASSWORD")
+OLLAMA_URL = env("OLLAMA_URL", "http://host.docker.internal:11434").rstrip("/")
+# NordRouter allows 15 rps on /v1/evaluate; stage 1 is ~1.1 s per PR, so 14 workers stay under it.
+STAGE1_WORKERS = int(env("JEV_STAGE1_WORKERS", "14"))
+STAGE2_WORKERS = int(env("JEV_STAGE2_WORKERS", "10"))
 # Descriptions of PRs whose author wrote nothing: a local Ollama model, or NordRouter's
 # OpenAI-compatible chat endpoint (no GPU needed). gemini-3.1-flash-lite ~8 s per diff;
 # deepseek-v4-flash is 10x cheaper but took 85 s on the same input, so it is too slow here.
-NORDROUTER_URL = os.environ.get("NORDROUTER_URL", "https://nordrouter.com").rstrip("/")
-DESCRIBER_MODEL = os.environ.get("DESCRIBER_MODEL", "google/gemini-3.1-flash-lite")
-DESCRIBER_WORKERS = int(os.environ.get("DESCRIBER_WORKERS", "6"))
-# Stage 2 git work (fetch branch, test merge, diff) runs in parallel worktrees: upstream did it
-# one PR at a time, which cost 32 of 48 minutes on a 3000-PR run while Jev answered in 21 s.
-MERGE_WORKERS = int(os.environ.get("JEV_MERGE_WORKERS", "6"))
+NORDROUTER_URL = env("NORDROUTER_URL", "https://nordrouter.com").rstrip("/")
+NORDROUTER_KEY = env("NORDROUTER_API_KEY")
+DESCRIBER_MODEL = env("DESCRIBER_MODEL", "google/gemini-3.1-flash-lite")
+DESCRIBER_WORKERS = int(env("DESCRIBER_WORKERS", "6"))
+# Stage 2 git work (fetch branch, test merge, diff) runs in parallel worktrees instead of one PR
+# at a time, which cost 32 of 48 minutes on a 3000-PR run while Jev answered in 21 s. Git is
+# CPU and disk bound here, so the default stays at a typical small server's core count.
+MERGE_WORKERS = int(env("JEV_MERGE_WORKERS", "4"))
 # Fork mining walks every fork with the compare API and asks Jev about the deltas.
-FORK_REST_WORKERS = int(os.environ.get("FORK_REST_WORKERS", "16"))
+FORK_REST_WORKERS = int(env("FORK_REST_WORKERS", "16"))
 # Fork list: REST pages are numbered, so they can be pulled several at a time.
-FORK_LIST_WORKERS = int(os.environ.get("FORK_LIST_WORKERS", "8"))
+FORK_LIST_WORKERS = int(env("FORK_LIST_WORKERS", "8"))
 
 app = FastAPI(title="PR Scout")
 lock = threading.RLock()
@@ -320,98 +341,136 @@ def http_json(url, data=None, headers=None, timeout=120):
         return json.load(r)
 
 
+RETRY_CODES = (429, 500, 502, 503, 504, 529)
+
+
+def backoff(attempt, cap=45.0):
+    """Exponential pause with jitter, so parallel workers do not retry in lockstep."""
+    time.sleep(min(cap, 1.5 * 2 ** attempt) * (1 + random.random() * 0.4))
+
+
 def http_json_retry(url, data=None, headers=None, timeout=120, tries=8):
-    """Same as http_json but survives transient resolver/network blips.
+    """Same as http_json but survives rate limits and transient resolver/network blips.
 
     Docker's embedded DNS occasionally answers `No address associated with hostname`
-    for a second or two (a systemd-resolved stub upstream), and long runs also meet
-    plain connection resets: GitHub over the user's proxy drops a request now and then.
-    Backoff is exponential with jitter, so parallel workers do not retry in lockstep.
+    for a second or two, and long runs also meet plain connection resets.
     """
     for attempt in range(tries):
         try:
             return http_json(url, data, headers, timeout)
         except urllib.error.HTTPError as e:
-            if e.code in (429, 500, 502, 503, 504, 529) and attempt < tries - 1:
-                time.sleep(min(45.0, 1.5 * 2 ** attempt) * (1 + random.random() * 0.4))
-                continue
-            raise
+            if e.code not in RETRY_CODES or attempt == tries - 1:
+                raise
+            backoff(attempt)
         except Exception:
             if attempt == tries - 1:
                 raise
-            time.sleep(min(45.0, 1.5 * 2 ** attempt) * (1 + random.random() * 0.4))
+            backoff(attempt)
 
 
 def git_fetch(repo, *args, tries=4):
-    """`git fetch` с повторами: сеть отваливается чаще, чем локальный git."""
-    last = None
+    """`git fetch` with retries: the network fails far more often than local git."""
+    r = None
     for attempt in range(tries):
         r = subprocess.run(["git", "-C", str(repo), "fetch", "-q", "--no-tags", *args], capture_output=True, text=True)
         if r.returncode == 0:
             return r
-        last = r
-        time.sleep(min(20.0, 2.0 ** attempt) * (1 + random.random() * 0.4))
-    return last
+        if attempt < tries - 1:
+            backoff(attempt, cap=20.0)
+    return r
 
 
-def jev(state_value, questions):
-    """Ask Jev typed questions about one PR.
+def fetch_prs(repo, numbers, failed=None):
+    """Fetch `pull/N/head` into `pr-N` for every number, in parallel and with retries.
 
-    TypeSafe names a yes/no question `noul` and answers with `noul`; NordRouter's
-    /v1/evaluate only knows `boolean` and answers with `probability`. Translate in
-    both directions so scoring.py keeps working against either provider.
+    `+` forces the update: authors force-push, and a rewritten branch would otherwise fail
+    the fetch on every rerun. Numbers that could not be fetched land in `failed` (if given).
+    """
+    def one(n):
+        return n, git_fetch(repo, "origin", f"+pull/{n}/head:pr-{n}").returncode != 0
+    with cf.ThreadPoolExecutor(MERGE_WORKERS) as ex:
+        for n, bad in ex.map(one, numbers):
+            if bad:
+                if failed is not None:
+                    failed[n] = {"merge": "fetch_failed", "conflicts": []}
+                emit({"type": "log", "message": f"#{n}: ветку PR не удалось скачать"})
 
-    Повторы: 429/5xx и любые сетевые сбои — с экспоненциальной паузой и джиттером
-    (прокси пользователя рвёт соединения, а параллельные воркеры иначе повторяют хором).
+
+def open_worktrees(repo, prefix, sha):
+    """Detached worktrees of `repo` at `sha`, one per parallel git worker, handed out through a queue."""
+    subprocess.run(["git", "-C", str(repo), "worktree", "prune"], capture_output=True, text=True)
+    pool, made = Queue(), []
+    for i in range(max(1, MERGE_WORKERS)):
+        wt = repo.parent / f"{prefix}-{i}"
+        if wt.exists():
+            subprocess.run(["git", "-C", str(repo), "worktree", "remove", "--force", str(wt)], capture_output=True, text=True)
+            shutil.rmtree(wt, ignore_errors=True)
+        r = subprocess.run(["git", "-C", str(repo), "worktree", "add", "--detach", "--force", str(wt), sha], capture_output=True, text=True)
+        if r.returncode:
+            emit({"type": "log", "message": f"worktree {wt.name} не создался: {r.stderr[-200:]}"})
+            continue
+        made.append(wt)
+        pool.put(wt)
+    if not made:
+        raise RuntimeError("Не удалось создать ни одной рабочей копии git (worktree) для тестовых мержей")
+    return pool, made
+
+
+def close_worktrees(repo, made):
+    for wt in made:
+        subprocess.run(["git", "-C", str(repo), "worktree", "remove", "--force", str(wt)], capture_output=True, text=True)
+    subprocess.run(["git", "-C", str(repo), "worktree", "prune"], capture_output=True, text=True)
+
+
+def jev(state_value, questions, tries=8):
+    """Ask Jev typed questions; never raises, a failure comes back as {"error": ...}.
+
+    Retries 429/5xx and network errors with backoff. NordRouter knows yes/no questions
+    as `boolean` and answers them with `probability`, TypeSafe calls both `noul`: the
+    questions are written for TypeSafe and translated at this boundary.
     """
     payload = {"model": JEV_MODEL, "state": state_value, "questions": to_provider(questions)}
-    for attempt in range(8):
+    headers = {"Authorization": f"Bearer {JEV_KEY}", "Content-Type": "application/json"}
+    for attempt in range(tries):
         try:
-            res = http_json(JEV_URL, payload, {"Authorization": f"Bearer {JEV_KEY}", "Content-Type": "application/json"}, 180)
+            res = http_json(JEV_URL, payload, headers, 180)
             if res.get("answers"):
                 res["answers"] = from_provider(res["answers"])
             return res
         except urllib.error.HTTPError as e:
-            if e.code in (429, 500, 502, 503, 504, 529) and attempt < 7:
-                time.sleep(min(45.0, 1.5 * 2 ** attempt) * (1 + random.random() * 0.4))
-                continue
-            return {"error": f"HTTP {e.code}"}
-        except Exception:
-            if attempt == 7:
-                return {"error": "retries exhausted"}
-            time.sleep(min(45.0, 1.5 * 2 ** attempt) * (1 + random.random() * 0.4))
+            if e.code not in RETRY_CODES or attempt == tries - 1:
+                return {"error": f"HTTP {e.code}"}
+        except Exception as e:
+            if attempt == tries - 1:
+                return {"error": f"retries exhausted: {str(e)[:120]}"}
+        backoff(attempt)
     return {"error": "retries exhausted"}
 
 
 def to_provider(questions):
-    """`noul` (TypeSafe) -> `boolean` (NordRouter); everything else goes as is."""
-    out = {}
-    for name, q in questions.items():
-        q = dict(q)
-        if q.get("type") == "noul":
-            q["type"] = "boolean"
-        out[name] = q
-    return out
+    """`noul` -> `boolean` for NordRouter; TypeSafe gets the questions as written."""
+    if JEV_PROVIDER != "nordrouter":
+        return questions
+    return {name: {**q, "type": "boolean"} if q.get("type") == "noul" else q for name, q in questions.items()}
 
 
 def from_provider(answers):
-    out = {}
-    for name, a in answers.items():
-        a = dict(a)
-        if a.get("type") == "boolean" and "probability" in a:
-            a["noul"] = a["probability"]
-        out[name] = a
-    return out
+    """NordRouter's `boolean` answers carry `probability`; expose it as `noul` like TypeSafe does."""
+    return {name: {**a, "noul": a["probability"]} if a.get("type") == "boolean" and "probability" in a else a
+            for name, a in answers.items()}
 
 
 def gh_rest(path, timeout=60, tries=6):
     """GitHub REST GET that respects the rate limit instead of dying on it.
 
     Reads X-RateLimit-Remaining/Reset on every answer and sleeps until the window
-    rolls over when the budget is nearly gone — a fork walk over 15k repos needs
-    several hourly windows and must survive them.
+    rolls over when the budget is nearly gone: a fork walk over 15k repos needs
+    several hourly windows and must survive them. Waiting for the window does not
+    use up a retry. Answers that will not change on a retry (a deleted fork, no
+    common history) come back as {"error": "HTTP <code>"}.
     """
-    for attempt in range(tries):
+    attempt = 0
+    while True:
         try:
             req = urllib.request.Request(f"https://api.github.com{path}", headers=gh_headers())
             with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -423,21 +482,24 @@ def gh_rest(path, timeout=60, tries=6):
                 time.sleep(wait)
             return data
         except urllib.error.HTTPError as e:
-            reset, remaining = (e.headers.get("X-RateLimit-Reset") if e.headers else None), (e.headers.get("X-RateLimit-Remaining") if e.headers else None)
-            if e.code in (403, 429) and (remaining == "0" or e.code == 429):
+            headers = e.headers or {}
+            reset, remaining = headers.get("X-RateLimit-Reset"), headers.get("X-RateLimit-Remaining")
+            if e.code == 429 or (e.code == 403 and remaining == "0"):
                 wait = max(5, int(reset) - int(time.time()) + 5) if reset else 60
                 emit({"type": "log", "message": f"лимит GitHub исчерпан (HTTP {e.code}), пауза {wait} с"})
                 time.sleep(wait)
                 continue
-            if e.code in (404, 451):
+            if e.code in (404, 409, 422, 451):
                 return {"error": f"HTTP {e.code}"}
-            if attempt == tries - 1:
+            attempt += 1
+            if attempt >= tries:
                 raise
-            time.sleep(2 * (attempt + 1))
+            backoff(attempt, cap=30.0)
         except Exception:
-            if attempt == tries - 1:
+            attempt += 1
+            if attempt >= tries:
                 raise
-            time.sleep(2 * (attempt + 1))
+            backoff(attempt, cap=30.0)
 
 
 def gh_headers(extra=None):
@@ -522,8 +584,8 @@ def ollama_models():
 def describe_job(slug):
     """Write a description from the diff when the author wrote little or nothing.
 
-    Two providers: a local Ollama model (upstream default) or any OpenAI-compatible
-    chat endpoint — here NordRouter, which needs no local GPU.
+    Two providers: a local Ollama model (the default) or NordRouter's OpenAI-compatible
+    chat endpoint, which needs no local GPU (`ollama.provider: "nordrouter"` in the config).
     """
     P, t0, started = projects[slug], time.time(), now_iso()
     cfg = P["config"]
@@ -531,8 +593,7 @@ def describe_job(slug):
     if not oc.get("enabled"):
         return None
     provider = oc.get("provider") or "ollama"
-    describer_key = os.environ.get("NORDROUTER_API_KEY") or JEV_KEY
-    if provider == "nordrouter" and not describer_key:
+    if provider == "nordrouter" and not NORDROUTER_KEY:
         raise RuntimeError("Для описаний через NordRouter нужен NORDROUTER_API_KEY")
     if not GH_TOKEN:
         raise RuntimeError("Для описаний нужен GITHUB_TOKEN (скачиваю дифы)")
@@ -551,7 +612,7 @@ def describe_job(slug):
             res = http_json_retry(f"{NORDROUTER_URL}/v1/chat/completions",
                                   {"model": oc.get("model") or DESCRIBER_MODEL, "messages": [{"role": "user", "content": prompt}],
                                    "max_tokens": oc.get("max_tokens", 400), "temperature": 0.2},
-                                  {"Authorization": f"Bearer {describer_key}", "Content-Type": "application/json"}, 180)
+                                  {"Authorization": f"Bearer {NORDROUTER_KEY}", "Content-Type": "application/json"}, 180)
             usage = res.get("usage") or {}
             text = (res["choices"][0]["message"].get("content") or "").strip()
             return pr["number"], text, usage.get("completion_tokens", 0)
@@ -605,7 +666,7 @@ def stage1_job(slug, limit=None):
         save(slug, "stage1")
     recompute(slug)
     return {"stage": "stage1", "started": started, "seconds": round(time.time() - t0), "items": len(prs), "errors": errors,
-            "input_tokens": tokens, "cost_usd": round(tokens * PRICE_PER_MTOK / 1e6, 4), "model": "jev-latest"}
+            "input_tokens": tokens, "cost_usd": round(tokens * PRICE_PER_MTOK / 1e6, 4), "model": JEV_LABEL}
 
 
 SKIP_FILE = re.compile(r"(pnpm-lock\.yaml|package-lock\.json|yarn\.lock|\.snap$|\.svg$|\.png$|\.lock$|/dist/|generated)")
@@ -633,33 +694,19 @@ def stage2_job(slug):
     git("fetch", "-q", "--no-tags", "origin", base, check=True)
     git("checkout", "-q", "-B", "stack", f"origin/{base}", check=True)
     for n in sorted(P["included"]):
-        git("fetch", "-q", "origin", f"pull/{n}/head:pr-{n}")
+        git_fetch(repo, "origin", f"+pull/{n}/head:pr-{n}")
         if git("merge", "-q", "--no-ff", "--no-edit", f"pr-{n}").returncode:
             git("merge", "--abort")
             emit({"type": "log", "message": f"#{n} из «уже взятых» не вливается в свежую {base}"})
     merges, diffs = {}, {}
-    # Ветки PR качаем параллельно: 120 последовательных fetch — это минуты ожидания сети.
-    with cf.ThreadPoolExecutor(MERGE_WORKERS) as ex:
-        for n, failed in ex.map(lambda n: (n, git("fetch", "-q", "origin", f"pull/{n}/head:pr-{n}").returncode != 0), finalists):
-            if failed:
-                merges[n] = {"merge": "fetch_failed", "conflicts": []}
+    # PR branches are fetched in parallel: 120 fetches one after another are minutes of network wait.
+    # `+` because authors force-push: without it a rewritten branch fails the fetch on every rerun.
+    fetch_prs(repo, finalists, merges)
 
-    # Тестовый мерж каждого финалиста идёт в своей рабочей копии: параллельные merge в одном
-    # дереве топчут друг друга (upstream делал это последовательно — 32 минуты из 48 на 3000 PR).
+    # Every finalist's test merge runs in a worktree of its own: parallel merges in one tree
+    # would trample each other.
     stack_sha = git("rev-parse", "stack").stdout.strip()
-    git("worktree", "prune")
-    pool = Queue()
-    worktrees = []
-    for i in range(max(1, MERGE_WORKERS)):
-        wt = repo.parent / f"merge-{i}"
-        if wt.exists():
-            subprocess.run(["git", "-C", str(repo), "worktree", "remove", "--force", str(wt)], capture_output=True, text=True)
-        r = subprocess.run(["git", "-C", str(repo), "worktree", "add", "--detach", "--force", str(wt), stack_sha], capture_output=True, text=True)
-        if r.returncode:
-            emit({"type": "log", "message": f"worktree {wt.name} не создался: {r.stderr[-200:]}"})
-            continue
-        worktrees.append(wt)
-        pool.put(wt)
+    pool, worktrees = open_worktrees(repo, "merge", stack_sha)
 
     def wgit(wt, *args):
         return subprocess.run(["git", "-C", str(wt), *args], capture_output=True, text=True)
@@ -687,7 +734,7 @@ def stage2_job(slug):
 
     def diff_of(n):
         """Diff of the PR against its merge base. Read-only: safe to run in parallel."""
-        mb = git("merge-base", "stack", f"pr-{n}").stdout.strip()
+        mb = git("merge-base", f"origin/{base}", f"pr-{n}").stdout.strip()
         chunks = [c for c in re.split(r"(?=^diff --git )", git("diff", mb, f"pr-{n}").stdout if mb else "", flags=re.M)
                   if c.strip() and not SKIP_FILE.search(c.split("\n", 1)[0])]
         chunks.sort(key=lambda c: ("test" in c.split("\n", 1)[0].lower(), len(c)))
@@ -702,9 +749,7 @@ def stage2_job(slug):
             for n, res, text in ex.map(test_merge, [(i, n) for i, n in enumerate(finalists, 1)]):
                 merges[n], diffs[n] = res, text
     finally:
-        for wt in worktrees:
-            subprocess.run(["git", "-C", str(repo), "worktree", "remove", "--force", str(wt)], capture_output=True, text=True)
-        git("worktree", "prune")
+        close_worktrees(repo, worktrees)
 
     def ci_status(n, previous):
         if not GH_TOKEN:
@@ -734,7 +779,7 @@ def stage2_job(slug):
         save(slug, "stage2")
     recompute(slug)
     return {"stage": "stage2", "started": started, "seconds": round(time.time() - t0), "items": len(finalists), "errors": 0,
-            "input_tokens": tokens, "cost_usd": round(tokens * PRICE_PER_MTOK / 1e6, 4), "model": "jev-latest"}
+            "input_tokens": tokens, "cost_usd": round(tokens * PRICE_PER_MTOK / 1e6, 4), "model": JEV_LABEL}
 
 
 # ---------- issues, forks, rivals: the same Jev, three more questions ----------
@@ -784,6 +829,7 @@ def issues_job(slug):
     P, t0, started = projects[slug], time.time(), now_iso()
     questions = issue_questions(P["config"])
     todo = [n for n, v in P["issues"].items() if v.get("meta")]
+    covered = {i for pr in P["prs"].values() for i in pr.get("issues") or []}
     tokens, done, errors = 0, 0, 0
     progress(0, len(todo), phase="issues")
     with cf.ThreadPoolExecutor(STAGE1_WORKERS) as ex:
@@ -794,19 +840,25 @@ def issues_job(slug):
         for fut in cf.as_completed(futures):
             n, res = futures[fut], fut.result()
             done += 1
+            issue = None
             if "answers" in res:
                 tokens += res["usage"]["input_tokens"]
                 with lock:
                     P["issues"][str(n)]["answers"] = res["answers"]
                     P["issues"][str(n)]["usage"] = res["usage"]
+                    meta = P["issues"][str(n)]["meta"]
+                sc = score_issue(meta, res["answers"], has_pr=n in covered)
+                issue = {"number": n, "title": meta["title"], "score": sc["score"], "kind_label": ISSUE_KIND_LABELS.get(sc["kind"], sc["kind"]),
+                         "has_pr": n in covered}
             else:
                 errors += 1
-            progress(done, len(todo), n, phase="issues", tokens=tokens, seconds=round(time.time() - t0, 1))
+            progress(done, len(todo), n, phase="issues", issue=issue, tokens=tokens, cost=round(tokens * PRICE_PER_MTOK / 1e6, 4),
+                     seconds=round(time.time() - t0, 1))
     with lock:
         save(slug, "issues")
     recompute(slug)
     return {"stage": "issues", "started": started, "seconds": round(time.time() - t0), "items": len(todo), "errors": errors,
-            "input_tokens": tokens, "cost_usd": round(tokens * PRICE_PER_MTOK / 1e6, 4), "model": "Jev"}
+            "input_tokens": tokens, "cost_usd": round(tokens * PRICE_PER_MTOK / 1e6, 4), "model": JEV_LABEL}
 
 
 def fetch_forks_job(slug):
@@ -856,7 +908,6 @@ def master_oids(slug, cfg, force=False):
     на живых данных 96% форков (193 из 200) отсеиваются так, и правило не пропускает
     ни одного форка с коммитами впереди (проверено настоящим compare).
     """
-    P = projects[slug]
     branch = cfg.get("default_branch") or "main"
     cache_path = pdir(slug) / "master_oids.json"
     cache = read_json(cache_path, {}) or {}
@@ -886,12 +937,12 @@ def master_oids(slug, cfg, force=False):
 
 
 def fork_heads(forks):
-    """head-коммит каждого форка — батчами по 50 репозиториев в одном GraphQL-запросе.
+    """Head commit of every fork, 50 repositories per GraphQL request.
 
-    Один запрос на 50 форков вместо сравнения каждого: 1200 форков уложились в 5 запросов.
-    Батчи независимы, поэтому идут параллельно (FORK_LIST_WORKERS), иначе 312 запросов
-    на 15.6к форков выстраиваются в очередь на десяток минут.
-    Удалённые и пустые репозитории приходят как NOT_FOUND — такие форки пропускаем.
+    One request per 50 forks instead of a compare each: 1200 forks fit in 5 requests, and the
+    batches run in parallel. Names and branches go in as variables, never into the query text.
+    The answer maps fork -> oid, or None when the repository or its branch is gone; forks
+    whose batch failed are left out, so the caller still compares them the slow way.
     """
     batch = 50
     groups = [[f for f in forks[i:i + batch] if f.get("branch")] for i in range(0, len(forks), batch)]
@@ -899,22 +950,34 @@ def fork_heads(forks):
     heads = {}
 
     def one(group):
-        parts = []
+        decl, parts, variables = [], [], {}
         for j, f in enumerate(group):
-            owner, name = f["fork"].split("/")
-            parts.append(f'r{j}: repository(owner:"{owner}",name:"{name}")'
-                         f'{{object(expression:"{f["branch"]}"){{... on Commit{{oid}}}}}}')
-        res = http_json_retry("https://api.github.com/graphql", {"query": "query{" + " ".join(parts) + "}"},
-                              gh_headers({"Content-Type": "application/json"}), 120)
-        data = res.get("data") or {}
+            owner, name = f["fork"].split("/", 1)
+            decl.append(f"$o{j}:String!,$n{j}:String!,$b{j}:String!")
+            parts.append(f"r{j}:repository(owner:$o{j},name:$n{j}){{object(expression:$b{j}){{...on Commit{{oid}}}}}}")
+            variables.update({f"o{j}": owner, f"n{j}": name, f"b{j}": f["branch"]})
+        query = f"query({','.join(decl)}){{{' '.join(parts)}}}"
+        try:
+            res = http_json_retry("https://api.github.com/graphql", {"query": query, "variables": variables},
+                                  gh_headers({"Content-Type": "application/json"}), 120)
+        except Exception as e:
+            emit({"type": "log", "message": f"head-коммиты {len(group)} форков не получены ({str(e)[:120]}), сравню их напрямую"})
+            return {}
+        data = res.get("data")
+        if not isinstance(data, dict):
+            return {}
+        # A missing repository comes back as a null alias plus a NOT_FOUND error; that is "gone".
+        # Any other error (rate limit, timeout) leaves the fork unknown rather than gone.
+        failed = {e.get("path", [None])[0] for e in res.get("errors") or [] if e.get("type") != "NOT_FOUND"}
         out = {}
         for j, f in enumerate(group):
-            obj = ((data.get(f"r{j}") or {}).get("object") or {})
-            out[f["fork"]] = obj.get("oid")
+            if f"r{j}" in failed:
+                continue
+            out[f["fork"]] = ((data.get(f"r{j}") or {}).get("object") or {}).get("oid")
         return out
 
     with cf.ThreadPoolExecutor(FORK_LIST_WORKERS) as ex:
-        for i, chunk in enumerate(ex.map(one, groups)):
+        for chunk in ex.map(one, groups):
             heads.update(chunk)
             progress(len(heads), len(forks), phase="forks-heads")
     return heads
@@ -956,7 +1019,9 @@ def forks_job(slug):
         heads = fork_heads(todo)
         skip, gone = [], []
         for f in todo:
-            oid = heads.get(f["fork"])
+            if f["fork"] not in heads:   # unknown: its batch failed, compare it
+                continue
+            oid = heads[f["fork"]]
             if oid and oid in oids:
                 skip.append(f)
             elif not oid:
@@ -983,19 +1048,22 @@ def forks_job(slug):
                 "input_tokens": 0, "cost_usd": 0, "model": "GitHub (отсев без compare)", **filtered}
     questions = fork_questions(cfg)
     queue: Queue = Queue(maxsize=max(8, FORK_REST_WORKERS * 8))
-    stat = {"compared": 0, "classified": 0, "tokens": 0, "errors": 0, "ahead": 0, "saved": 0}
-    t0 = time.time()
+    stat = {"compared": 0, "classified": 0, "tokens": 0, "errors": 0, "ahead": 0}
+    t_stream = time.time()
 
-    def note(**extra):
+    def note():
         progress(stat["compared"], len(todo), phase="forks", ahead=stat["ahead"], classified=stat["classified"],
-                 tokens=stat["tokens"], seconds=round(time.time() - t0, 1), **extra)
+                 tokens=stat["tokens"], cost=round(stat["tokens"] * PRICE_PER_MTOK / 1e6, 4), seconds=round(time.time() - t_stream, 1))
 
     def compare(f):
-        fork_owner, fork_repo = f["fork"].split("/")
-        # per_page ограничивает ответ: compare возвращает до 250 коммитов и до 300 файлов,
-        # а нам нужны счётчики и заголовки, не весь список.
+        fork_owner = f["fork"].split("/")[0]
+        # per_page caps the answer: compare returns up to 250 commits and 300 files,
+        # and all we need are the counts and the commit subjects.
         path = f"/repos/{owner}/{name}/compare/{base}...{fork_owner}:{f['branch']}?per_page={int(fcfg.get('max_commits', 30))}"
-        res = gh_rest(path)
+        try:
+            res = gh_rest(path)
+        except Exception as e:  # one broken fork must not end a walk over thousands
+            res = {"error": f"ошибка сети: {str(e)[:80]}"}
         if res.get("error"):
             return f, {"status": res["error"], "ahead": 0, "behind": 0, "commits": [], "files": [], "lines": 0}
         commits = [{"sha": c["sha"][:8], "date": (c.get("commit", {}).get("author") or {}).get("date", "")[:10],
@@ -1022,7 +1090,8 @@ def forks_job(slug):
                         P["forks"][f["fork"]]["usage"] = ans["usage"]
                         stat["classified"] += 1
                         stat["tokens"] += ans["usage"]["input_tokens"]
-                        row = fork_rows(P).get(f["fork"])
+                        row = score_fork(P["forks"][f["fork"]], ans["answers"])
+                        row["kind_label"] = FORK_KIND_LABELS.get(row["kind"], row["kind"])
                     else:
                         P["forks"][f["fork"]]["error"] = ans.get("error", "ошибка Jev")
                         stat["errors"] += 1
@@ -1049,15 +1118,10 @@ def forks_job(slug):
                     if (res.get("ahead") or 0) > 0:
                         stat["ahead"] += 1
                 if (res.get("ahead") or 0) > 0 and res.get("commits"):
-                    queue.put((f, res))          # классифицируем сразу, не дожидаясь конца прохода
-                    while queue.full():
-                        time.sleep(0.2)
-                else:
-                    note()                        # форку нечего классифицировать: строка уже готова
+                    queue.put((f, res))  # classified right away; blocks while Jev is behind
                 with lock:
                     if stat["compared"] % int(fcfg.get("save_every", 25)) == 0:
                         save(slug, "forks")
-                        stat["saved"] += 1
                 note()
     finally:
         for _ in consumer_futures:
@@ -1068,7 +1132,7 @@ def forks_job(slug):
     recompute(slug)
     return {"stage": "forks", "started": started, "seconds": round(time.time() - t0), "items": stat["compared"],
             "errors": stat["errors"], "input_tokens": stat["tokens"], "cost_usd": round(stat["tokens"] * PRICE_PER_MTOK / 1e6, 4),
-            "model": "GitHub compare + Jev", **filtered}
+            "jev_calls": stat["classified"], "model": f"GitHub compare + {JEV_LABEL}", **filtered}
 
 
 def hot_map(git, base, commits=400):
@@ -1101,8 +1165,8 @@ def map_job(slug):
     base_branch = cfg.get("default_branch") or "main"
     base = f"origin/{base_branch}"
 
-    def git(*args, check=False, cwd=None):
-        r = subprocess.run(["git", "-C", str(cwd or repo), *args], capture_output=True, text=True)
+    def git(*args, check=False):
+        r = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
         if check and r.returncode:
             raise RuntimeError(f"git {' '.join(args)}: {r.stderr[-300:]}")
         return r
@@ -1130,8 +1194,8 @@ def map_job(slug):
     # ---- ссылки: PR-ветки уже скачаны stage2, ветки форков тянем сами
     def fetch_ref(c):
         if c["kind"] == "fork":
-            return c, git("fetch", "-q", "--no-tags", f"https://github.com/{c['repo']}.git",
-                          f"{c['branch']}:{c['ref']}").returncode != 0
+            # `+`: forks get force-pushed too, and a rerun must pick up the new head
+            return c, git_fetch(repo, f"https://github.com/{c['repo']}.git", f"+{c['branch']}:{c['ref']}").returncode != 0
         return c, git("rev-parse", "--verify", "-q", c["ref"]).returncode != 0
 
     progress(0, len(cands), phase="map-fetch")
@@ -1162,17 +1226,8 @@ def map_job(slug):
     to_merge = [(a, b) for a, b in pairs if compat[triage.pair_key(a["id"], b["id"])]["overlap"] > 0]
     emit({"type": "log", "message": f"карта мёрджей: {len(cands)} кандидатов, {len(pairs)} пар, "
                                     f"пересекаются файлами {len(to_merge)} (их и мержим живьём)"})
-    pool, worktrees = Queue(), []
-    git("worktree", "prune")
     base_sha = git("rev-parse", base).stdout.strip()
-    for i in range(max(1, MERGE_WORKERS)):
-        wt = repo.parent / f"map-{i}"
-        if wt.exists():
-            subprocess.run(["git", "-C", str(repo), "worktree", "remove", "--force", str(wt)], capture_output=True, text=True)
-        if subprocess.run(["git", "-C", str(repo), "worktree", "add", "--detach", "--force", str(wt), base_sha],
-                          capture_output=True, text=True).returncode == 0:
-            worktrees.append(wt)
-            pool.put(wt)
+    pool, worktrees = open_worktrees(repo, "map", base_sha) if to_merge else (Queue(), [])
 
     def merge_pair(args):
         i, (a, b) = args
@@ -1207,9 +1262,7 @@ def map_job(slug):
             for key, res in ex.map(merge_pair, list(enumerate(to_merge, 1))):
                 compat[key].update(res)
     finally:
-        for wt in worktrees:
-            subprocess.run(["git", "-C", str(repo), "worktree", "remove", "--force", str(wt)], capture_output=True, text=True)
-        git("worktree", "prune")
+        close_worktrees(repo, worktrees)
 
     # ---- попарно по смыслу: одно и то же или нет, и какой лучше
     sem_cap = int(mcfg.get("semantic_pairs") or 150)
@@ -1231,28 +1284,27 @@ def map_job(slug):
         with cf.ThreadPoolExecutor(STAGE1_WORKERS) as ex:
             for idx, a, b, res in ex.map(ask, list(enumerate(sem_targets, 1))):
                 key = triage.pair_key(a["id"], b["id"])
-                if "answers" in res:
+                ans = res.get("answers") or {}
+                if "same_problem" in ans:
                     tokens += res["usage"]["input_tokens"]
-                    ans = res["answers"]
-                    choice = ans.get("better", {}).get("choice")
-                    compat[key].update({"duplicate": round(ans["same_problem"]["noul"], 2),
+                    choice = (ans.get("better") or {}).get("choice")
+                    compat[key].update({"duplicate": round(ans["same_problem"].get("noul") or 0, 2),
                                         "better": {"a": a["id"], "b": b["id"]}.get(choice, choice)})
                 else:
                     errors += 1
                 progress(idx, len(sem_targets), phase="map-semantic", tokens=tokens)
 
     # ---- расклады
-    hot_total_used = sum(c["hot"] for c in cands) or hot_total
     plans = triage.build_plans(cands, compat, hot_total=float(hot_total), top_n=int(mcfg.get("top_n") or 20))
-    by_id = {c["id"]: c for c in cands}
-    for name, p in plans.items():
-        p["members"] = [{k: c.get(k) for k in ("id", "kind", "title", "score", "area", "lines", "files")} | {"files": len(c.get("files") or [])}
-                        for c in p["members"]]
+    for p in plans.values():
+        p["members"] = [{k: c.get(k) for k in ("id", "kind", "number", "repo", "title", "score", "area", "lines")}
+                        | {"files": len(c.get("files") or [])} for c in p["members"]]
     dup_pairs = sorted([{"pair": k, **v} for k, v in compat.items() if (v.get("duplicate") or 0) >= 0.6], key=lambda x: -x["duplicate"])
     conflict_pairs = sorted([{"pair": k, **v} for k, v in compat.items() if v.get("merge") == "conflict" or v.get("merge_rev") == "conflict"],
                             key=lambda x: -x["overlap"])
     result = {
-        "candidates": [{k: c.get(k) for k in ("id", "kind", "title", "score", "area", "verdict", "lines")} | {"files": len(c.get("files") or [])}
+        "candidates": [{k: c.get(k) for k in ("id", "kind", "number", "repo", "title", "score", "area", "verdict", "lines")}
+                       | {"files": len(c.get("files") or [])}
                        for c in sorted(cands, key=lambda c: -(c.get("score") or 0))],
         "pairs": len(pairs), "pairs_merged": len(to_merge), "pairs_semantic": len(sem_targets),
         "conflicts": conflict_pairs, "duplicates": dup_pairs, "plans": plans,
@@ -1263,7 +1315,7 @@ def map_job(slug):
         save(slug, "map")
     recompute(slug)
     return {"stage": "map", "started": started, "seconds": round(time.time() - t0), "items": len(cands),
-            "errors": errors, "conflicts": len(conflict_pairs), "input_tokens": tokens,
+            "errors": errors, "conflicts": len(conflict_pairs), "input_tokens": tokens, "jev_calls": len(sem_targets) if JEV_KEY else 0,
             "cost_usd": round(tokens * PRICE_PER_MTOK / 1e6, 4), "model": "git + Jev"}
 
 
@@ -1304,14 +1356,22 @@ def stack_job(slug):
         return {"stage": "stack", "started": started, "seconds": 0, "items": 0, "errors": 0, "input_tokens": 0,
                 "cost_usd": 0, "model": "git"}
     git("config", "user.email", "scout@localhost"); git("config", "user.name", "PR Scout")
-    git("fetch", "-q", "--no-tags", "origin", check=True)
-    with cf.ThreadPoolExecutor(MERGE_WORKERS) as ex:
-        for n, failed in ex.map(lambda n: (n, git("fetch", "-q", "origin", f"pull/{n}/head:pr-{n}").returncode != 0), chosen):
-            if failed:
-                emit({"type": "log", "message": f"#{n}: ветку не скачать, пропускаю"})
+    if git_fetch(repo, "origin", cfg.get("default_branch") or "main").returncode:
+        raise RuntimeError("Не удалось обновить основную ветку из origin")
+    included = sorted(P["included"])
+    fetch_prs(repo, included + chosen)
     git("merge", "--abort")
     git("checkout", "-q", "-B", "stack-sim", base, check=True)
     git("reset", "-q", "--hard", base)
+    # PRs already taken are the floor of the stack: the new ones have to land on top of them,
+    # and they are part of what every upstream pull has to be merged with.
+    base_merged = []
+    for n in included:
+        if git("merge", "-q", "--no-ff", "--no-edit", f"pr-{n}").returncode == 0:
+            base_merged.append(n)
+        else:
+            git("merge", "--abort")
+            emit({"type": "log", "message": f"#{n} из «уже взятых» не вливается в свежую основную ветку"})
 
     merged, conflicted, skipped = [], [], []
     progress(0, len(chosen), phase="stack")
@@ -1329,22 +1389,20 @@ def stack_job(slug):
             git("merge", "--abort")
             conflicted.append({"number": n, "files": files[:15], "message": (m.stderr or m.stdout)[-200:]})
             progress(i, len(chosen), n, phase="stack", merge="conflict")
-    # 2. горячие файлы upstream
-    hot = {}
-    log = git("log", "-n", str(hot_commits), "--name-only", "--pretty=format:").stdout
-    for line in log.splitlines():
-        line = line.strip()
-        if line:
-            hot[line] = hot.get(line, 0) + 1
+    # 2. горячие файлы upstream: история основной ветки, а не HEAD — в HEAD уже влиты наши PR,
+    #    и их собственные коммиты завысили бы «правки апстрима»
+    hot = hot_map(git, base, hot_commits)
     touched = set(git("diff", "--name-only", f"{base}...stack-sim").stdout.split())
     adds = git("diff", "--shortstat", f"{base}...stack-sim").stdout.strip()
+    ins, dels = (re.search(rf"(\d+) {w}", adds) for w in ("insertion", "deletion"))
     total_hot = sum(hot.values()) or 1
     hot_overlap = sorted(((f, hot[f]) for f in touched if f in hot), key=lambda kv: -kv[1])
     weight = sum(w for _, w in hot_overlap) / total_hot
     result = {
         "verdicts": sorted(verdicts), "considered": len(chosen), "merged": len(merged), "conflicted": len(conflicted),
-        "skipped": skipped, "conflicts": conflicted, "merged_prs": merged,
-        "patch": {"files": len(touched), "shortstat": adds},
+        "skipped": skipped, "conflicts": conflicted, "merged_prs": merged, "included": base_merged,
+        "patch": {"files": len(touched), "shortstat": adds,
+                  "insertions": int(ins.group(1)) if ins else 0, "deletions": int(dels.group(1)) if dels else 0},
         "hot": {"commits_scanned": hot_commits, "files_in_stack": len(touched), "hot_in_stack": len(hot_overlap),
                 "hot_top": [{"file": f, "edits": w} for f, w in hot_overlap[:20]],
                 "churn_share": round(100 * weight, 2)},
@@ -1355,7 +1413,7 @@ def stack_job(slug):
         save(slug, "stack")
     recompute(slug)
     return {"stage": "stack", "started": started, "seconds": round(time.time() - t0), "items": len(chosen),
-            "errors": len(conflicted), "input_tokens": 0, "cost_usd": 0, "model": "git"}
+            "errors": len(skipped), "conflicts": len(conflicted), "input_tokens": 0, "cost_usd": 0, "model": "git"}
 
 
 def rivals_job(slug):
@@ -1369,7 +1427,6 @@ def rivals_job(slug):
     todo = {i: sorted(v, key=lambda n: -(P["rows"].get(n, {}).get("score") or 0)) for i, v in groups.items() if len(v) > 1}
     rivals, tokens, errors, done = {}, 0, 0, 0
     progress(0, len(todo), phase="rivals")
-    questions = None
 
     def ask(item):
         issue_no, nums = item
@@ -1382,7 +1439,7 @@ def rivals_job(slug):
                 row["review"] = {k: round(v, 2) for k, v in _review_numbers(s2["review"]["answers"]).items()}
                 row["merge_status"] = (s2.get("merge") or {}).get("merge")
             cands.append(row)
-        q, body = rival_question(cfg, {**meta, "body": (meta.get("body") or "")[:1200]}, cands)
+        q, _ = rival_question(cfg, {**meta, "body": (meta.get("body") or "")[:1200]}, cands)
         return issue_no, meta, cands, q
 
     prepared = [ask(item) for item in todo.items()]
@@ -1407,7 +1464,7 @@ def rivals_job(slug):
         save(slug, "rivals")
     recompute(slug)
     return {"stage": "rivals", "started": started, "seconds": round(time.time() - t0), "items": len(todo), "errors": errors,
-            "input_tokens": tokens, "cost_usd": round(tokens * PRICE_PER_MTOK / 1e6, 4), "model": "Jev"}
+            "input_tokens": tokens, "cost_usd": round(tokens * PRICE_PER_MTOK / 1e6, 4), "model": JEV_LABEL}
 
 
 BOT_AUTHORS = re.compile(r"(\[bot\]$|-bot$|^dependabot|^renovate|^github-actions)", re.I)
@@ -1454,12 +1511,14 @@ async def create_project(request: Request):
     if slug in projects:
         raise HTTPException(409, "Такой проект уже есть")
     preset = preset_for(repo)
+    describer = body.get("describer") if body.get("describer") in ("ollama", "nordrouter") else "ollama"
     cfg = {"repo": repo, "name": body.get("name") or preset.get("name") or repo.split("/")[1], "profile": body.get("profile", "").strip() or preset.get("profile", ""),
            "community_only": body.get("community_only", True), "include_drafts": False, "exclude_authors": [],
-           "stack_prs": [], "stack_prs_url": "", "finalists": int(body.get("finalists") or 120),
-           "ollama": {"enabled": bool(body.get("ollama", True)), "model": body.get("ollama_model") or "qwen3.5:9b", "min_body": 200},
+           "stack_prs": [], "stack_prs_url": "", "finalists": int(body.get("finalists") or preset.get("finalists") or 120),
+           "ollama": {"enabled": bool(body.get("ollama", True)), "provider": describer, "min_body": 200,
+                      "model": body.get("ollama_model") or ("qwen3.5:9b" if describer == "ollama" else DESCRIBER_MODEL)},
            "areas": {"other": "Anything else"}, "area_labels": {"other": "Прочее"}}
-    for k in ("areas", "area_labels", "exclude_authors", "stack_prs_url", "default_branch"):
+    for k in ("areas", "area_labels", "exclude_authors", "stack_prs_url", "default_branch", "forks", "stack", "map"):
         if k in preset:
             cfg[k] = preset[k]
     cfg["custom_areas"] = "areas" in preset
@@ -1478,15 +1537,15 @@ async def update_config(slug: str, request: Request):
         for k in ("name", "profile", "community_only", "include_drafts", "finalists", "stack_prs_url"):
             if k in body:
                 cfg[k] = body[k]
-        for k in ("forks", "triage"):
+        for k in ("forks", "stack", "map", "ollama"):
             if k in body:
+                if not isinstance(body[k], dict):
+                    raise HTTPException(400, f"«{k}» должен быть объектом")
                 cfg[k] = {**cfg.get(k, {}), **body[k]}
         if "exclude_authors" in body:
             cfg["exclude_authors"] = [a.strip() for a in re.split(r"[,\s]+", body["exclude_authors"]) if a.strip()] if isinstance(body["exclude_authors"], str) else body["exclude_authors"]
         if "stack_prs" in body:
             cfg["stack_prs"] = [int(x) for x in re.findall(r"\d+", str(body["stack_prs"]))]
-        if "ollama" in body:
-            cfg["ollama"] = {**cfg.get("ollama", {}), **body["ollama"]}
         write_json(pdir(slug) / "config.json", cfg)
         P["included"] = load_included(cfg)
     recompute(slug)
@@ -1545,7 +1604,7 @@ def summary(slug: str):
                 "rivals": {"groups": len(P.get("rivals") or {}),
                            "picked": sum(1 for r in (P.get("rivals") or {}).values() if r.get("chosen_pr")),
                            "list": list((P.get("rivals") or {}).values())},
-                "jev_ready": bool(JEV_KEY), "github_ready": bool(GH_TOKEN), "comparison": cost_comparison(P["runs"])}
+                "jev_ready": bool(JEV_KEY), "github_ready": bool(GH_TOKEN), "jev": jev_info(), "comparison": cost_comparison(P["runs"])}
 
 
 @app.get("/api/p/{slug}/issues")
@@ -1595,15 +1654,20 @@ def get_ollama_models():
     return ollama_models()
 
 
+# Jobs that never ask Jev (map asks only when a key is set, and works on git alone without one).
+NO_JEV_JOBS = ("fetch", "describe", "issues_meta", "forks_meta", "stack", "map")
+
+
 @app.post("/api/p/{slug}/jobs/{name}")
 async def start_job(slug: str, name: str, request: Request):
     get_project(slug)
-    if name not in ("fetch", "describe") and not JEV_KEY:
-        raise HTTPException(400, "Не задан ключ Jev (TYPESAFE_API_KEY или NORDROUTER_API_KEY)")
+    if name not in NO_JEV_JOBS and not JEV_KEY:
+        raise HTTPException(400, f"Не задан ключ Jev: {_JEV['key']} ({_JEV['name']})")
     body = await request.json() if request.headers.get("content-length") not in (None, "0") else {}
     pipelines = {
         "full": [fetch_job, describe_job, stage1_job, stage2_job],
-        "everything": [fetch_job, describe_job, stage1_job, stage2_job, fetch_issues_job, issues_job, rivals_job, fetch_forks_job, forks_job],
+        "everything": [fetch_job, describe_job, stage1_job, stage2_job, fetch_issues_job, issues_job, rivals_job,
+                       fetch_forks_job, forks_job, stack_job, map_job],
         "fetch": [fetch_job], "describe": [describe_job], "stage2": [stage2_job],
         "stage1": [(lambda s: stage1_job(s, body.get("limit")))],
         "issues": [fetch_issues_job, issues_job], "issues_meta": [fetch_issues_job], "issues_jev": [issues_job],
@@ -1622,7 +1686,22 @@ async def start_job(slug: str, name: str, request: Request):
 
 @app.get("/api/status")
 def status():
-    return {"job": dict(job), "jev_ready": bool(JEV_KEY), "github_ready": bool(GH_TOKEN), "ollama_models": ollama_models()}
+    return {"job": dict(job), "jev_ready": bool(JEV_KEY), "github_ready": bool(GH_TOKEN), "jev": jev_info(),
+            "nordrouter_ready": bool(NORDROUTER_KEY), "ollama_models": ollama_models()}
+
+
+def jev_info():
+    return {"provider": JEV_PROVIDER, "name": _JEV["name"], "model": JEV_MODEL, "key": _JEV["key"], "price_per_mtok": PRICE_PER_MTOK}
+
+
+@app.get("/api/p/{slug}/report.md")
+def report(slug: str):
+    """The whole cycle as one markdown document: PR verdicts, issues, forks, rivals, stack and merge map."""
+    P = get_project(slug)
+    with lock:
+        text = build_report(P)
+    name = f"pr-scout-{slug.replace('__', '-')}-{dt.date.today().isoformat()}.md"
+    return Response(text, media_type="text/markdown; charset=utf-8", headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
 @app.get("/api/events")

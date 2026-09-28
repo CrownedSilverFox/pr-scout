@@ -91,12 +91,12 @@ def issue_questions(cfg):
         "relevance": {"type": "score", "instructions": {
             "question": f"How much does this problem matter for the way `our_setup` uses {name}?", "our_setup": profile},
             "criteria": RELEVANCE_CRITERIA},
-        "common_case": {"type": "boolean", "instructions": "This problem happens in everyday use, not only in a rare edge case, an unusual configuration, or a specific operating system."},
-        "actionable": {"type": "boolean", "instructions": "This issue can be closed by a code change in the repository, not only by a documentation edit or a support answer."},
-        "clear": {"type": "boolean", "instructions": "The issue explains a concrete problem with enough detail (steps, version, logs) that someone could act on it."},
-        "security_or_data": {"type": "boolean", "instructions": "This issue is about a security hole, lost or corrupted data, or leaked credentials."},
-        "by_design": {"type": "boolean", "instructions": "The current behaviour is intentional, so the issue asks for a product decision rather than a fix."},
-        "reproducible": {"type": "boolean", "instructions": "The issue gives enough information to reproduce the problem, or to find the code responsible for it."},
+        "common_case": {"type": "noul", "instructions": "This problem happens in everyday use, not only in a rare edge case, an unusual configuration, or a specific operating system."},
+        "actionable": {"type": "noul", "instructions": "This issue can be closed by a code change in the repository, not only by a documentation edit or a support answer."},
+        "clear": {"type": "noul", "instructions": "The issue explains a concrete problem with enough detail (steps, version, logs) that someone could act on it."},
+        "security_or_data": {"type": "noul", "instructions": "This issue is about a security hole, lost or corrupted data, or leaked credentials."},
+        "by_design": {"type": "noul", "instructions": "The current behaviour is intentional, so the issue asks for a product decision rather than a fix."},
+        "reproducible": {"type": "noul", "instructions": "The issue gives enough information to reproduce the problem, or to find the code responsible for it."},
     }
 
 
@@ -124,17 +124,17 @@ def fork_questions(cfg):
     """Typed questions for the commits one fork has ahead of upstream."""
     name, profile = _profile(cfg)
     return {
-        "kind": {"type": "choice", "instructions": f"What do the commits this fork has ahead of upstream mainly do?", "criteria": FORK_KINDS},
+        "kind": {"type": "choice", "instructions": "What do the commits this fork has ahead of upstream mainly do?", "criteria": FORK_KINDS},
         "value": {"type": "score", "instructions": f"If upstream merged exactly these commits, how valuable would that be for users of {name} in general?",
                   "criteria": VALUE_CRITERIA},
         "relevance": {"type": "score", "instructions": {
             "question": f"How much would these commits matter for the way `our_setup` uses {name}?", "our_setup": profile},
             "criteria": RELEVANCE_CRITERIA},
-        "general": {"type": "boolean", "instructions": f"These commits are useful to {name} users in general, not only to one company's private deployment, branding or internal workflow."},
-        "duplicate": {"type": "boolean", "instructions": "Upstream already contains an equivalent change, or an open pull request already proposes it."},
-        "tests": {"type": "boolean", "instructions": "The ahead commits add or update automated tests."},
-        "risky": {"type": "boolean", "instructions": "These commits are risky: they change the database schema or migrations, authentication or permissions logic, or rewrite a large core subsystem."},
-        "secrets": {"type": "boolean", "instructions": "The ahead commits contain something that must not go upstream as is: credentials, internal hostnames, customer data, or private branding."},
+        "general": {"type": "noul", "instructions": f"These commits are useful to {name} users in general, not only to one company's private deployment, branding or internal workflow."},
+        "duplicate": {"type": "noul", "instructions": "Upstream already contains an equivalent change, or an open pull request already proposes it."},
+        "tests": {"type": "noul", "instructions": "The ahead commits add or update automated tests."},
+        "risky": {"type": "noul", "instructions": "These commits are risky: they change the database schema or migrations, authentication or permissions logic, or rewrite a large core subsystem."},
+        "secrets": {"type": "noul", "instructions": "The ahead commits contain something that must not go upstream as is: credentials, internal hostnames, customer data, or private branding."},
     }
 
 
@@ -184,7 +184,7 @@ def rival_question(cfg, issue, candidates, limit=8):
                                   f"All of them claim to close issue #{candidates[0].get('issue')}.")
     return {
         "choice": {"type": "choice", "instructions": instructions, "criteria": crit},
-        "proper_fix": {"type": "boolean", "instructions": "At least one of these pull requests properly fixes the reported problem, rather than only a symptom of it."},
+        "proper_fix": {"type": "noul", "instructions": "At least one of these pull requests properly fixes the reported problem, rather than only a symptom of it."},
     }, body
 
 
@@ -287,7 +287,7 @@ def build_plans(cands, compat, hot_total=1.0, top_n=20):
 def map_pair_questions(a, b):
     """Вопросы про пару кандидатов: не одно ли и то же они чинят и какой лучше."""
     return {
-        "same_problem": {"type": "boolean", "instructions":
+        "same_problem": {"type": "noul", "instructions":
                          "The two changes fix or add the same thing: applying one makes the other unnecessary or contradictory."},
         "better": {"type": "choice", "instructions":
                    "If we could take only one of the two, which is better for the project: smaller and safer wins over larger and broader.",

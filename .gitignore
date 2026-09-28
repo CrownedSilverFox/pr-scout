@@ -8,3 +8,4 @@ server.log
 web/node_modules/
 web/dist/
 app/static/
+reports/

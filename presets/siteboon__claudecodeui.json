@@ -1,7 +1,7 @@
 {
   "repo": "siteboon/claudecodeui",
   "name": "CloudCLI",
-  "profile": "Our setup: one developer self-hosts his own fork of CloudCLI (1.37.x) as the single workspace where he drives several agent CLIs - Claude Code, Codex, OpenCode, Antigravity/Gemini - plus his own provider router for models like deepseek and gemini. He keeps his real projects in it: a large PHP/PostgreSQL insurance backend (29 of 96 recorded sessions), insurance provider integrations and dictionaries (17), local Linux infrastructure over SSH (9), SQL/ELK data analysis (7), small external sites (4), and work on this tool itself (12 sessions, 342 user messages - his longest threads). Evidence from those 96 sessions, what he keeps asking of the product: (1) a session must be reliable like a messenger - websocket reconnect, live streaming of text and tool calls, no endless 'loading tool' states, subagent start/finish visible without a page reload, usable from a phone; (2) every agent CLI and provider in one window, including non-Anthropic models; (3) session history turned into a task board and a session map, grouped by product, so he never searches old sessions by hand; (4) his own artifact system - previews and tables rendered in the browser, artifacts with attached .md/.html/.xlsx files, per-artifact TTL, 'download last answer as .md'; (5) files the agent touched openable in the built-in explorer by click; (6) headless install and auth of agent CLIs. He merges upstream releases into his own fork every version, so small, self-contained, easy-to-rebase fixes matter more than sweeping refactors. He does not want telemetry, vendor lock-in, or integrations tied to one commercial service.",
+  "profile": "Our setup: a self-hosted CloudCLI instance used as the single web workspace for several agent CLIs (Claude Code, Codex, Gemini, OpenCode) and non-Anthropic models through a provider router, used from a desktop browser and a phone. What matters most: reliable sessions (websocket reconnect, live streaming of text and tool calls, visible subagent runs), every agent CLI and provider in one window, session history that is easy to navigate, artifacts and file previews in the browser, and headless install and auth of the CLIs. Upstream releases are merged into our fork every version, so small self-contained fixes matter more than sweeping refactors. No telemetry, no vendor lock-in.",
   "areas": {
     "providers_cli": "Agent provider integrations and CLI adapters: Claude Code, Codex, Cursor, Gemini/Antigravity, OpenCode, Qwen; CLI auth, model lists, runtime wrapper, provider settings",
     "sessions_streaming": "Sessions and the chat stream: session list/history/transcripts, resume and fork, websockets, live output, subagent runs and completion, mobile reconnect",
@@ -35,11 +35,8 @@
   "finalists": 60,
   "ollama": {
     "enabled": true,
-    "provider": "nordrouter",
-    "model": "google/gemini-3.1-flash-lite",
-    "min_body": 200,
-    "max_tokens": 400,
-    "max_diff": 24000
+    "model": "qwen3.5:9b",
+    "min_body": 200
   },
   "custom_areas": true,
   "default_branch": "main",
