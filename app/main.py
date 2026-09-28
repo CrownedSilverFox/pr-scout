@@ -25,7 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from scoring import (KIND_LABELS, NEGATIVE, QUESTION_LABELS, STAGE2_QUESTIONS, auto_areas, cost_comparison,
                      mark_duplicates, score_pr, stage1_questions, stage1_state, verdict)
 import triage
-from triage import (FORK_KIND_LABELS, ISSUE_KIND_LABELS, apply_rival, fork_questions,
+from triage import (FORK_KIND_LABELS, ISSUE_KIND_LABELS, ISSUE_KINDS, ISSUE_QUESTION_LABELS, apply_rival, fork_questions,
                     issue_questions, rival_question, score_fork, score_issue)
 from report import build_report
 
@@ -1352,7 +1352,12 @@ def stack_job(slug):
     chosen = sorted([n for n, r in P["rows"].items() if r.get("verdict") in verdicts], key=lambda n: -(P["rows"][n].get("score") or 0))
     if limit:
         chosen = chosen[:limit]
-    if not chosen:
+    if not chosen:  # nothing to build is a result too: the UI says so instead of "never run"
+        with lock:
+            P["stack"] = {"verdicts": sorted(verdicts), "considered": 0, "merged": 0, "conflicted": 0, "skipped": [], "conflicts": [],
+                          "merged_prs": [], "included": [], "patch": {"files": 0, "shortstat": ""}, "merge_cost": 0,
+                          "hot": {"commits_scanned": hot_commits, "files_in_stack": 0, "hot_in_stack": 0, "hot_top": [], "churn_share": 0}}
+            save(slug, "stack")
         return {"stage": "stack", "started": started, "seconds": 0, "items": 0, "errors": 0, "input_tokens": 0,
                 "cost_usd": 0, "model": "git"}
     git("config", "user.email", "scout@localhost"); git("config", "user.name", "PR Scout")
@@ -1590,14 +1595,12 @@ def summary(slug: str):
         return {"total": len(rows), "classified": sum(r["classified"] for r in rows), "finalists": len(P["finalists"]),
                 "included": sorted(P["included"]), "runs": P["runs"], "job": dict(job), "config": P["config"],
                 "issues": {"total": len(issues), "classified": sum(r["classified"] for r in issues),
-                           "without_pr": sum(1 for r in issues if r["classified"] and not r.get("open_pr")),
-                           "ranked": sorted([r for r in issues if r["classified"]], key=lambda r: -(r.get("score") or 0))[:20]},
+                           "without_pr": sum(1 for r in issues if r["classified"] and not r.get("open_pr"))},
                 "forks": {"scanned": len(forks), "ahead": sum(1 for r in forks if (r.get("ahead") or 0) > 0),
                           "classified": sum(r["classified"] for r in forks),
                           "duplicates": sum(1 for r in forks if r.get("duplicate_of")),
                           "clusters": len({r["cluster"] for r in forks if r.get("cluster")}),
-                          "total": len(P.get("forks") or {}),
-                          "ranked": sorted([r for r in forks if r["classified"] and not r.get("duplicate_of")], key=lambda r: -(r.get("score") or 0))[:20]},
+                          "total": len(P.get("forks") or {})},
                 "stack": P.get("stack") or {},
                 "map": {k: v for k, v in (P.get("map") or {}).items() if k != "candidates"} | {
                     "candidate_list": (P.get("map") or {}).get("candidates") or []} if P.get("map") else {},
@@ -1612,6 +1615,18 @@ def list_issues(slug: str):
     P = get_project(slug)
     with lock:
         return sorted((P.get("issue_rows") or {}).values(), key=lambda r: -(r.get("score") or 0))
+
+
+@app.get("/api/p/{slug}/issues/{n}")
+def issue_detail(slug: str, n: int):
+    """One issue with its text and every answer Jev gave, for the issue sheet."""
+    P = get_project(slug)
+    with lock:
+        item = (P.get("issues") or {}).get(str(n))
+        if not item or not item.get("meta"):
+            raise HTTPException(404)
+        return {"issue": item["meta"], "row": (P.get("issue_rows") or {}).get(n), "answers": item.get("answers"),
+                "labels": ISSUE_QUESTION_LABELS, "kinds": {k: ISSUE_KIND_LABELS.get(k, k) for k in ISSUE_KINDS}}
 
 
 @app.get("/api/p/{slug}/forks")
@@ -1729,7 +1744,8 @@ def healthz():
 
 @app.get("/")
 def index():
-    return FileResponse(APP_DIR / "static" / "index.html")
+    # no-cache: assets are content-hashed, but a stale index.html would keep loading the old build
+    return FileResponse(APP_DIR / "static" / "index.html", headers={"Cache-Control": "no-cache"})
 
 
 app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")

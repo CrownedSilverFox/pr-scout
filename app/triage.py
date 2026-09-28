@@ -33,6 +33,13 @@ ISSUE_KIND_LABELS = {
 
 RIVAL_LABELS = {"none": "Ни один не подходит"}
 
+# What each issue question asks, for the issue sheet in the UI.
+ISSUE_QUESTION_LABELS = {
+    "kind": "Что это", "severity": "Насколько больно", "relevance": "Важно для нашего сценария",
+    "common_case": "Случается в обычной работе", "actionable": "Закрывается правкой кода", "clear": "Проблема описана понятно",
+    "security_or_data": "Безопасность или потеря данных", "by_design": "Так задумано", "reproducible": "Можно воспроизвести",
+}
+
 FORK_KINDS = {
     "fix": "Fixes incorrect or broken upstream behaviour",
     "feature": "Adds a capability upstream does not have",
